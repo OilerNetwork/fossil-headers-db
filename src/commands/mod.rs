@@ -1,8 +1,9 @@
-use derive_more::From;
+use derive_more::{Display, From};
 use futures_util::future::join_all;
 use log::{error, info, warn};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
+use std::time::Duration;
 use std::{thread, time};
 use tokio::task;
 
@@ -10,7 +11,7 @@ use crate::{db, endpoints, fossil_mmr, types::type_utils};
 
 pub type Result<T> = core::result::Result<T, Error>;
 
-#[derive(Debug, From)]
+#[derive(Debug, Display, From)]
 pub enum Error {
     Generic(String),
 
@@ -224,6 +225,7 @@ async fn process_block(block_number: i64) -> Result<()> {
                 block_number, e
             ),
         }
+        tokio::time::sleep(Duration::from_secs(60)).await;
     }
     error!("[update_from] Error with block number {}", block_number);
     Err(Error::Generic(format!(

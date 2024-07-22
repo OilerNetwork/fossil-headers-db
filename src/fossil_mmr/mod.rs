@@ -35,7 +35,7 @@ pub enum Error {
     DBError(db::Error),
 }
 
-const DB_PATH: &str = "/fossil_mmr/mmr_db";
+const DB_PATH: &str = "mmr_db";
 const MMR_ID: &str = "blockheaders_mmr";
 static HASHES_MMR: OnceCell<Arc<Mutex<MMR>>> = OnceCell::const_new();
 static IS_UPDATING: Lazy<Arc<AtomicBool>> = Lazy::new(|| Arc::new(AtomicBool::new(false)));

@@ -66,7 +66,7 @@ pub async fn initialize_router(should_terminate: Arc<AtomicBool>) -> Result<()> 
 
 async fn shutdown_signal(should_terminate: Arc<AtomicBool>) {
     while !should_terminate.load(Ordering::SeqCst) {
-        sleep(Duration::from_secs(30)).await;
+        sleep(Duration::from_secs(10)).await;
     }
     info!("Shutdown signal received, shutting down router");
 }
