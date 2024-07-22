@@ -1,6 +1,7 @@
+use crate::types::BlockDetails;
 use crate::types::BlockHeaderWithFullTransaction;
-use anyhow::{Context, Result};
 use chrono::{TimeZone, Utc};
+use derive_more::{Display, From};
 use log::{info, warn};
 use sqlx::postgres::PgConnectOptions;
 use sqlx::ConnectOptions;
@@ -9,6 +10,14 @@ use sqlx::{postgres::PgPoolOptions, Pool, Postgres};
 use std::sync::Arc;
 use std::time::Duration;
 use tokio::sync::OnceCell;
+
+pub type Result<T> = core::result::Result<T, Error>;
+
+#[derive(Debug, Display, From)]
+pub enum Error {
+    #[from]
+    SqlxError(sqlx::Error),
+}
 
 static DB_POOL: OnceCell<Arc<Pool<Postgres>>> = OnceCell::const_new();
 pub const DB_MAX_CONNECTIONS: u32 = 1000;
@@ -40,27 +49,24 @@ pub async fn create_tables() -> Result<()> {
     let pool = get_db_pool().await?;
     sqlx::query(include_str!("./sql/blockheaders_table.sql"))
         .execute(&*pool)
-        .await
-        .context("Failed to create blockheaders table")?;
+        .await?;
     sqlx::query(include_str!("./sql/transactions_table.sql"))
         .execute(&*pool)
-        .await
-        .context("Failed to create transactions table")?;
+        .await?;
     Ok(())
 }
 
 pub async fn get_last_stored_blocknumber() -> Result<i64> {
-    let pool = get_db_pool().await.context("Failed to get database pool")?;
+    let pool = get_db_pool().await?;
     let result: (i64,) = sqlx::query_as("SELECT COALESCE(MAX(number), -1) FROM blockheaders")
         .fetch_one(&*pool)
-        .await
-        .context("Failed to get last stored block number")?;
+        .await?;
 
     Ok(result.0)
 }
 
 pub async fn find_first_gap(start: i64, end: i64) -> Result<Option<i64>> {
-    let pool = get_db_pool().await.context("Failed to get database pool")?;
+    let pool = get_db_pool().await?;
     let result: Option<(i64,)> = sqlx::query_as(
         r#"
         WITH RECURSIVE number_series(n) AS (
@@ -76,8 +82,7 @@ pub async fn find_first_gap(start: i64, end: i64) -> Result<Option<i64>> {
     .bind(start)
     .bind(end)
     .fetch_optional(&*pool)
-    .await
-    .context("Failed to find first gap")?;
+    .await?;
 
     Ok(result.map(|r| r.0))
 }
@@ -110,8 +115,7 @@ pub async fn write_blockheader(block_header: BlockHeaderWithFullTransaction) -> 
     .bind(convert_hex_string_to_i64(&block_header.gas_used))
     .bind(
         Utc.timestamp_opt(convert_hex_string_to_i64(&block_header.timestamp), 0)
-            .single()
-            .context("Invalid timestamp")?,
+            .single(),
     )
     .bind(convert_hex_string_to_bytes(&block_header.extra_data))
     .bind(convert_hex_string_to_i64(&block_header.difficulty))
@@ -139,8 +143,7 @@ pub async fn write_blockheader(block_header: BlockHeaderWithFullTransaction) -> 
         block_header.signature.as_deref(),
     ))
     .execute(&mut *tx) // Changed this line
-    .await
-    .context("Failed to insert block header")?;
+    .await?;
 
     if result.rows_affected() == 0 {
         warn!(
@@ -189,10 +192,7 @@ pub async fn write_blockheader(block_header: BlockHeaderWithFullTransaction) -> 
         query_builder.push(" ON CONFLICT (transaction_hash) DO NOTHING");
 
         let query = query_builder.build();
-        let result = query
-            .execute(&mut *tx)
-            .await
-            .context("Failed to insert transactions")?; // Changed this line
+        let result = query.execute(&mut *tx).await?; // Changed this line
 
         info!(
             "Inserted {} transactions for block {}",
@@ -201,8 +201,25 @@ pub async fn write_blockheader(block_header: BlockHeaderWithFullTransaction) -> 
         );
     }
 
-    tx.commit().await.context("Failed to commit transaction")?;
+    tx.commit().await?;
     Ok(())
+}
+
+pub async fn get_blockheaders(start_blocknumber: i64) -> Result<Vec<BlockDetails>> {
+    let pool = get_db_pool().await?;
+    let result: Vec<BlockDetails> = sqlx::query_as(
+        r#"
+        SELECT block_hash, number FROM blockheaders
+            WHERE number >= $1
+            ORDER BY number ASC
+            LIMIT 1
+        "#,
+    )
+    .bind(start_blocknumber)
+    .fetch_all(&*pool)
+    .await?;
+
+    Ok(result)
 }
 
 // Helper functions

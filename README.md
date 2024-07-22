@@ -39,7 +39,7 @@ What you would need:
 
 1. Create a .env file in the root folder
 
-   _blockheader_updater/.env_
+   _fossil-headers-db/.env_
 
    ```
     NODE_CONNECTION_STRING=<node_connection_string>
@@ -50,7 +50,7 @@ What you would need:
 
 1. Clone the repo
    ```sh
-   git clone https://github.com/jonathantxj/BlockheadersUpdater.git
+   git clone https://github.com/OilerNetwork/fossil-headers-db.git
    ```
 1. Build project
    ```sh

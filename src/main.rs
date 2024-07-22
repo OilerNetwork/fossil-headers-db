@@ -1,14 +1,30 @@
 mod commands;
 mod db;
 mod endpoints;
+mod fossil_mmr;
+mod router;
 mod types;
 
-use anyhow::{Context, Result};
 use clap::{Parser, ValueEnum};
 use core::cmp::min;
+use derive_more::From;
 use log::info;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
+use std::time::Duration;
+use tokio::time::sleep;
+
+pub type Result<T> = core::result::Result<T, Error>;
+
+#[derive(Debug, From)]
+pub enum Error {
+    Generic(String),
+
+    #[from]
+    CommandError(commands::Error),
+    #[from]
+    CtrlCError(ctrlc::Error),
+}
 
 #[derive(Parser)]
 #[command(version, about, long_about = None)]
@@ -43,35 +59,45 @@ async fn main() -> Result<()> {
 
     let cli = Cli::parse();
     let should_terminate = Arc::new(AtomicBool::new(false));
+    let terminate_clone = should_terminate.clone();
 
     setup_ctrlc_handler(Arc::clone(&should_terminate))?;
 
+    tokio::spawn(async move {
+        let res = router::initialize_router(should_terminate.clone()).await;
+        match res {
+            Ok(_) => (),
+            Err(e) => loop {
+                info!("Router error: {e}");
+                sleep(Duration::from_secs(60)).await;
+            },
+        }
+    });
+
     match cli.mode {
         Mode::Fix => {
-            commands::fill_gaps(cli.start, cli.end, Arc::clone(&should_terminate))
-                .await
-                .context("Failed to fill gaps")?;
+            commands::fill_gaps(cli.start, cli.end, Arc::clone(&terminate_clone)).await?;
         }
         Mode::Update => {
             commands::update_from(
                 cli.start,
                 cli.end,
                 min(cli.loopsize, db::DB_MAX_CONNECTIONS),
-                Arc::clone(&should_terminate),
+                Arc::clone(&terminate_clone),
             )
-            .await
-            .context("Failed to update")?;
+            .await?;
         }
     }
-
     Ok(())
 }
 
 fn setup_ctrlc_handler(should_terminate: Arc<AtomicBool>) -> Result<()> {
-    ctrlc::set_handler(move || {
+    match ctrlc::set_handler(move || {
         info!("Received Ctrl+C");
         info!("Waiting for current blocks to finish...");
         should_terminate.store(true, Ordering::SeqCst);
-    })
-    .context("Failed to set Ctrl+C handler")
+    }) {
+        Ok(_) => Ok(()),
+        Err(e) => Err(Error::Generic(format!("Failed to set Ctrl-C Handler: {e}"))),
+    }
 }

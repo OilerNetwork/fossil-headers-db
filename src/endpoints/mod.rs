@@ -1,11 +1,20 @@
-use std::time::Duration;
-
-use anyhow::{Context, Result};
+use derive_more::{Display, From};
 use once_cell::sync::Lazy;
 use reqwest::Client;
 use serde::{Deserialize, Serialize};
+use std::time::Duration;
 
 use crate::types::{BlockHeaderWithEmptyTransaction, BlockHeaderWithFullTransaction};
+
+pub type Result<T> = core::result::Result<T, Error>;
+
+#[derive(Debug, Display, From)]
+pub enum Error {
+    Generic(String),
+
+    #[from]
+    ReqwestError(reqwest::Error),
+}
 
 static CLIENT: Lazy<Client> = Lazy::new(Client::new);
 static NODE_CONNECTION_STRING: Lazy<String> = Lazy::new(|| {
@@ -35,10 +44,7 @@ pub async fn get_latest_blocknumber(timeout: Option<u64>) -> Result<String> {
         params: vec!["finalized", "false"],
     };
 
-    match make_rpc_call::<_, BlockHeaderWithEmptyTransaction>(&params, timeout)
-        .await
-        .context("Failed to get latest block number")
-    {
+    match make_rpc_call::<_, BlockHeaderWithEmptyTransaction>(&params, timeout).await {
         Ok(blockheader) => Ok(blockheader.number),
         Err(e) => Err(e),
     }
