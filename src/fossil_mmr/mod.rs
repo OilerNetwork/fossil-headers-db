@@ -1,6 +1,6 @@
 use accumulators::{
     hasher::keccak::KeccakHasher,
-    mmr::{element_index_to_leaf_index, elements_count_to_leaf_count, AppendResult, Proof, MMR},
+    mmr::{element_index_to_leaf_index, elements_count_to_leaf_count, map_leaf_index_to_element_index, AppendResult, Proof, MMR},
     store::sqlite::SQLiteStore,
 };
 use anyhow::Result;
@@ -23,6 +23,7 @@ const MAX_RETRIES: u64 = 10;
 const DB_FILE_PATH: &str = "mmr_db";
 const MMR_ID: &str = "blockheaders_mmr";
 const MMR_APPEND_LOOPSIZE: i32 = 10_000; // How many (upper limit) block hashes are retrieved at for each query (limit for performance)
+const MMR_APPEND_CHUNKSIZE: usize = 50;
 static HASHES_MMR: OnceCell<Arc<Mutex<MMR>>> = OnceCell::const_new();
 static IS_UPDATING: Lazy<Arc<AtomicBool>> = Lazy::new(|| Arc::new(AtomicBool::new(false)));
 
@@ -155,35 +156,38 @@ async fn append_to_mmr(
         }
     };
     info!("First block verified");
-    let mut mmr_guard = mmr.lock().await;
 
-    for block_detail in &block_details[1..] {
-        if should_terminate.load(Ordering::Relaxed) {
-            info!("Termination requested. Stopping MMR update process.");
-            let element_count = mmr_guard.elements_count.get().await?;
-            let last_blocknumber_added: i64 = element_count_to_blocknumber(element_count)?;
+    for block_detail_chunk in block_details[1..].chunks(MMR_APPEND_CHUNKSIZE) {
+        let mut mmr_guard = mmr.lock().await;
+        for block_detail in block_detail_chunk {
+            
+            if should_terminate.load(Ordering::Relaxed) {
+                info!("Termination requested. Stopping MMR update process.");
+                let element_count = mmr_guard.elements_count.get().await?;
+                let last_blocknumber_added: i64 = element_count_to_blocknumber(element_count)?;
 
-            info!("Last block added to MMR: {}", last_blocknumber_added);
-            return Ok(());
+                info!("Last block added to MMR: {}", last_blocknumber_added);
+                return Ok(());
+            }
+
+            // Checks the next hash to be added is what is expected (ensures hashes are added in order and without gaps)
+            assert_eq!(
+                block_detail.number,
+                prev_blocknumber + 1,
+                "Blockdetails not added in order. Expected blocknumber: {}, received blocknumber: {}",
+                prev_blocknumber + 1,
+                block_detail.number
+            );
+
+            let append_result: AppendResult = mmr_guard
+                .append(block_detail.block_hash.to_string())
+                .await?;
+
+            update_mmr_stats(block_detail.number, append_result.root_hash).await?;
+
+            debug!("Block {} added", prev_blocknumber);
+            prev_blocknumber = block_detail.number;
         }
-
-        // Checks the next hash to be added is what is expected (ensures hashes are added in order and without gaps)
-        assert_eq!(
-            block_detail.number,
-            prev_blocknumber + 1,
-            "Blockdetails not added in order. Expected blocknumber: {}, received blocknumber: {}",
-            prev_blocknumber + 1,
-            block_detail.number
-        );
-
-        let append_result: AppendResult = mmr_guard
-            .append(block_detail.block_hash.to_string())
-            .await?;
-
-        update_mmr_stats(block_detail.number, append_result.root_hash).await?;
-
-        debug!("Block {} added", prev_blocknumber);
-        prev_blocknumber = block_detail.number;
     }
 
     match block_details.last() {
@@ -228,7 +232,8 @@ async fn verify_first_new_block_sequence(
 }
 
 pub async fn get_proof(blocknumber: i64) -> Result<Proof> {
-    let element_index: usize = (blocknumber + 1).try_into().unwrap();
+    let leaf_index: usize = (blocknumber + 1).try_into()?;
+    let element_index: usize = map_leaf_index_to_element_index(leaf_index);
     let mmr: Arc<Mutex<MMR>> = get_mmr().await?;
     let mmr_guard: MutexGuard<MMR> = mmr.lock().await;
     let res: Proof = mmr_guard.get_proof(element_index, None).await?;
