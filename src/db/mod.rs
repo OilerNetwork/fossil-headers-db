@@ -50,19 +50,6 @@ pub async fn check_db_connection() -> Result<()> {
     Ok(())
 }
 
-pub async fn create_tables() -> Result<()> {
-    let pool = get_db_pool().await?;
-    sqlx::query(include_str!("./sql/blockheaders_table.sql"))
-        .execute(&*pool)
-        .await
-        .context("Failed to create blockheaders table")?;
-    sqlx::query(include_str!("./sql/transactions_table.sql"))
-        .execute(&*pool)
-        .await
-        .context("Failed to create transactions table")?;
-    Ok(())
-}
-
 /**
  * Retrieves the blocknumber of the latest stored blockheader
  *
