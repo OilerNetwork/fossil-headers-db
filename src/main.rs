@@ -1,5 +1,5 @@
 #![deny(unused_crate_dependencies)]
-use fossil_headers_db as _;
+use fossil_headers_db::{self as _, indexer};
 
 mod commands;
 mod db;
@@ -40,6 +40,7 @@ struct Cli {
 enum Mode {
     Fix,
     Update,
+    Full,
 }
 
 #[tokio::main]
@@ -80,6 +81,7 @@ async fn main() -> Result<()> {
                 )
                 .await
             }
+            Mode::Full => indexer::start_indexer().await,
         };
 
         match res {
