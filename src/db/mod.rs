@@ -1,4 +1,4 @@
-use crate::types::type_utils::convert_hex_string_to_i64;
+use crate::utils::convert_hex_string_to_i64;
 use crate::types::BlockHeaderWithFullTransaction;
 use eyre::{Context, Error, Result};
 use futures::FutureExt;

@@ -1,7 +1,8 @@
 use crate::types::{
-    type_utils::convert_hex_string_to_i64, BlockHeaderWithEmptyTransaction,
+    BlockHeaderWithEmptyTransaction,
     BlockHeaderWithFullTransaction,
 };
+use crate::utils::convert_hex_string_to_i64;
 use eyre::{Context, Result};
 use once_cell::sync::Lazy;
 use reqwest::Client;

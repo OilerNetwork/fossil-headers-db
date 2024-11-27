@@ -6,6 +6,7 @@ mod db;
 mod router;
 mod rpc;
 mod types;
+mod utils;
 
 use clap::{Parser, ValueEnum};
 use core::cmp::min;
