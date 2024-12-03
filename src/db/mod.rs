@@ -1,5 +1,5 @@
-use crate::utils::convert_hex_string_to_i64;
 use crate::types::BlockHeaderWithFullTransaction;
+use crate::utils::convert_hex_string_to_i64;
 use eyre::{Context, Error, Result};
 use futures::FutureExt;
 use sqlx::postgres::PgConnectOptions;
