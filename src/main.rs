@@ -3,9 +3,9 @@ use fossil_headers_db as _;
 
 mod commands;
 mod db;
+mod repositories;
 mod router;
 mod rpc;
-mod types;
 mod utils;
 
 use clap::{Parser, ValueEnum};
