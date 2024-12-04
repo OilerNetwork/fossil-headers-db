@@ -19,6 +19,7 @@ mod db_test;
 static DB_POOL: OnceCell<Arc<Pool<Postgres>>> = OnceCell::const_new();
 pub const DB_MAX_CONNECTIONS: u32 = 50;
 
+// TODO: Not use a oncecell but instead use some sort of DI for easier testing.
 pub async fn get_db_pool() -> Result<Arc<Pool<Postgres>>> {
     if let Some(pool) = DB_POOL.get() {
         Ok(pool.clone())

@@ -15,7 +15,8 @@ pub struct IndexMetadata {
 }
 
 pub trait IndexMetadataModelTrait {
-    async fn get_index_metadata(&self) -> Result<IndexMetadata, ModelError>;
+    fn new(pool: Arc<Pool<Postgres>>) -> Self;
+    async fn get_index_metadata(&self) -> Result<Option<IndexMetadata>, ModelError>;
     async fn set_is_backfilling(&self, is_backfilling: bool) -> Result<(), ModelError>;
     async fn set_initial_indexing_status(
         &self,
@@ -33,15 +34,27 @@ pub trait IndexMetadataModelTrait {
 pub struct IndexMetadataModel(Arc<Pool<Postgres>>);
 
 impl IndexMetadataModelTrait for IndexMetadataModel {
-    async fn get_index_metadata(&self) -> Result<IndexMetadata, ModelError> {
-        let result: IndexMetadata = sqlx::query_as(
+    fn new(pool: Arc<Pool<Postgres>>) -> Self {
+        IndexMetadataModel(pool)
+    }
+
+    async fn get_index_metadata(&self) -> Result<Option<IndexMetadata>, ModelError> {
+        let result = sqlx::query_as(
             r#"
             SELECT id, current_latest_block_number, indexing_starting_block_number, is_backfilling, updated_at
             FROM indexer_metadata
             "#,
         )
         .fetch_one(&*self.0)
-        .await?;
+        .await;
+
+        let result = match result {
+            Ok(result) => Some(result),
+            Err(err) => match err {
+                sqlx::Error::RowNotFound => None,
+                _ => return Err(ModelError::DatabaseError(err)),
+            },
+        };
 
         Ok(result)
     }
