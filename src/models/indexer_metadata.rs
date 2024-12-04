@@ -107,11 +107,7 @@ impl IndexMetadataModelTrait for IndexMetadataModel {
                 UPDATE indexer_metadata
                 SET current_latest_block_number = $1,
                     indexing_starting_block_number = $2,
-<<<<<<< HEAD
                     is_backfilling = $3,
-=======
-                    is_backfilling = $3
->>>>>>> c99f6e1 (feat: add indexer metadata table + model)
                     updated_at = CURRENT_TIMESTAMP
                 "#,
             )
