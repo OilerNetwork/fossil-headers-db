@@ -20,10 +20,6 @@ pub async fn fill_gaps(
     end: Option<i64>,
     should_terminate: Arc<AtomicBool>,
 ) -> Result<()> {
-    db::create_tables()
-        .await
-        .context("Failed to create tables")?;
-
     let range_start_pointer = start.unwrap_or(0).max(0);
     let range_end = get_range_end(end).await?;
 
@@ -140,10 +136,6 @@ pub async fn update_from(
     size: u32,
     should_terminate: Arc<AtomicBool>,
 ) -> Result<()> {
-    db::create_tables()
-        .await
-        .context("Failed to create tables")?;
-
     let range_start = get_first_missing_block(start).await?;
     info!("Range start: {}", range_start);
 
