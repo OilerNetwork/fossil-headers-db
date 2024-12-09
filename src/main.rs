@@ -3,7 +3,7 @@ use fossil_headers_db as _;
 
 mod commands;
 mod db;
-mod models;
+mod repositories;
 mod router;
 mod rpc;
 mod types;

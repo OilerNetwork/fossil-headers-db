@@ -2,13 +2,13 @@ use core::error;
 use std::fmt::Display;
 
 #[derive(Debug)]
-pub enum ModelError {
+pub enum RepositoryError {
     DatabaseError(sqlx::Error),
     UpdateError(String),
     UnexpectedError,
 }
 
-impl Display for ModelError {
+impl Display for RepositoryError {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
             Self::DatabaseError(err) => err.fmt(f),
@@ -18,18 +18,18 @@ impl Display for ModelError {
     }
 }
 
-impl error::Error for ModelError {
+impl error::Error for RepositoryError {
     fn source(&self) -> Option<&(dyn error::Error + 'static)> {
         match self {
-            ModelError::DatabaseError(err) => Some(err),
-            ModelError::UpdateError(_) => None,
-            ModelError::UnexpectedError => None,
+            RepositoryError::DatabaseError(err) => Some(err),
+            RepositoryError::UpdateError(_) => None,
+            RepositoryError::UnexpectedError => None,
         }
     }
 }
 
-impl From<sqlx::Error> for ModelError {
+impl From<sqlx::Error> for RepositoryError {
     fn from(err: sqlx::Error) -> Self {
-        ModelError::DatabaseError(err)
+        RepositoryError::DatabaseError(err)
     }
 }
