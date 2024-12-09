@@ -1,7 +1,7 @@
 pub mod commands;
 pub mod db;
 pub mod indexer;
-pub mod models;
+pub mod repositories;
 pub mod router;
 pub mod rpc;
 pub mod types;

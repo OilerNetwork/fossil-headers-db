@@ -18,14 +18,14 @@ use fossil_headers_db::{
 use tracing::{error, info};
 use tracing_subscriber::{fmt, EnvFilter};
 
-use fossil_headers_db::models::{
-    indexer_metadata::{IndexMetadata, IndexMetadataModel, IndexMetadataModelTrait},
-    model::ModelError,
+use fossil_headers_db::repositories::{
+    indexer_metadata::{IndexMetadata, IndexMetadataRepository, IndexMetadataRepositoryTrait},
+    repository::RepositoryError,
 };
 
 pub async fn get_indexer_metadata() -> Result<IndexMetadata> {
     let pool = get_db_pool().await?;
-    let model = IndexMetadataModel::new(pool);
+    let model = IndexMetadataRepository::new(pool);
 
     if let Some(metadata) = model.get_index_metadata().await? {
         return Ok(metadata);
@@ -41,7 +41,7 @@ pub async fn get_indexer_metadata() -> Result<IndexMetadata> {
         return Ok(metadata);
     }
 
-    Err(ModelError::UnexpectedError.into())
+    Err(RepositoryError::UnexpectedError.into())
 }
 
 #[tokio::main]
