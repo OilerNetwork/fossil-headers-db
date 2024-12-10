@@ -6,6 +6,7 @@ use tracing::error;
 use super::repository::RepositoryError;
 
 #[derive(Debug, Deserialize, sqlx::FromRow)]
+#[allow(dead_code)]
 pub struct IndexMetadata {
     pub id: i64,
     pub current_latest_block_number: i64,
