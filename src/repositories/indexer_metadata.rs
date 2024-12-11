@@ -16,7 +16,6 @@ pub struct IndexMetadata {
 }
 
 pub trait IndexMetadataRepositoryTrait {
-    fn new(pool: Arc<Pool<Postgres>>) -> Self;
     async fn get_index_metadata(&self) -> Result<Option<IndexMetadata>, RepositoryError>;
     async fn set_is_backfilling(&self, is_backfilling: bool) -> Result<(), RepositoryError>;
     async fn set_initial_indexing_status(
@@ -34,11 +33,13 @@ pub trait IndexMetadataRepositoryTrait {
 // Model is used to interact with the database
 pub struct IndexMetadataRepository(Arc<Pool<Postgres>>);
 
-impl IndexMetadataRepositoryTrait for IndexMetadataRepository {
-    fn new(pool: Arc<Pool<Postgres>>) -> Self {
+impl IndexMetadataRepository {
+    pub fn new(pool: Arc<Pool<Postgres>>) -> Self {
         IndexMetadataRepository(pool)
     }
+}
 
+impl IndexMetadataRepositoryTrait for IndexMetadataRepository {
     async fn get_index_metadata(&self) -> Result<Option<IndexMetadata>, RepositoryError> {
         let result = sqlx::query_as(
             r#"
@@ -148,7 +149,7 @@ impl IndexMetadataRepositoryTrait for IndexMetadataRepository {
 
         if result.rows_affected() != 1 {
             error!("Failed to insert initial indexing status");
-            return Err(RepositoryError::UpdateError(
+            return Err(RepositoryError::InsertError(
                 "Failed to insert initial indexing status".to_owned(),
             ));
         }
