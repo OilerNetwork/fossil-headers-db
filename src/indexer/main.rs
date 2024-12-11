@@ -10,8 +10,8 @@ use eyre::{Context, Result};
 use fossil_headers_db::{
     db::get_db_pool,
     indexer::{
-        service_batch::{self, BatchIndexConfig},
-        service_quick::{self, QuickIndexConfig},
+        batch_service::{self, BatchIndexConfig},
+        quick_service::{self, QuickIndexConfig},
     },
     router, rpc,
 };
@@ -81,16 +81,16 @@ pub async fn main() -> Result<()> {
     let quick_index_terminator = Arc::clone(&should_terminate);
 
     let quick_indexer_handle = thread::Builder::new()
-        .name("[quick_indexer]".to_owned())
+        .name("[quick_index]".to_owned())
         .spawn(move || {
             let rt = tokio::runtime::Runtime::new()?;
 
             info!("Starting quick indexer");
-            if let Err(e) = rt.block_on(service_quick::quick_index(
+            if let Err(e) = rt.block_on(quick_service::quick_index(
                 quick_index_config,
                 quick_index_terminator,
             )) {
-                error!("[quick_indexer] unexpected error {}", e);
+                error!("[quick_index] unexpected error {}", e);
             }
             Ok(())
         })?;
@@ -102,16 +102,16 @@ pub async fn main() -> Result<()> {
     let batch_index_terminator = Arc::clone(&should_terminate);
 
     let batch_indexer_handle = thread::Builder::new()
-        .name("[batch_indexer]".to_owned())
+        .name("[batch_index]".to_owned())
         .spawn(move || {
             let rt = tokio::runtime::Runtime::new()?;
 
             info!("Starting batch indexer");
-            if let Err(e) = rt.block_on(service_batch::batch_index(
+            if let Err(e) = rt.block_on(batch_service::batch_index(
                 batch_index_config,
                 batch_index_terminator,
             )) {
-                error!("[batch_indexer] unexpected error {}", e);
+                error!("[batch_index] unexpected error {}", e);
             }
             Ok(())
         })?;
