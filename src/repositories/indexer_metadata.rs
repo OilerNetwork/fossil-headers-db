@@ -149,7 +149,7 @@ impl IndexMetadataRepositoryTrait for IndexMetadataRepository {
 
         if result.rows_affected() != 1 {
             error!("Failed to insert initial indexing status");
-            return Err(RepositoryError::UpdateError(
+            return Err(RepositoryError::InsertError(
                 "Failed to insert initial indexing status".to_owned(),
             ));
         }
