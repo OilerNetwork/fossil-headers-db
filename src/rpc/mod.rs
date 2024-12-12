@@ -7,7 +7,8 @@ use once_cell::sync::Lazy;
 use reqwest::Client;
 use serde::{Deserialize, Serialize};
 use std::time::Duration;
-use tracing::error;
+use tokio::time::sleep;
+use tracing::{error, warn};
 
 static CLIENT: Lazy<Client> = Lazy::new(Client::new);
 static NODE_CONNECTION_STRING: Lazy<Option<String>> = Lazy::new(|| {
@@ -15,6 +16,9 @@ static NODE_CONNECTION_STRING: Lazy<Option<String>> = Lazy::new(|| {
         .map_err(|e| error!("Failed to get NODE_CONNECTION_STRING: {}", e))
         .ok()
 });
+
+// Arbitrarily set, can be set somewhere else.
+const MAX_RETRIES: u8 = 5;
 
 #[derive(Deserialize, Debug)]
 pub struct RpcResponse<T> {
@@ -38,9 +42,13 @@ pub async fn get_latest_finalized_blocknumber(timeout: Option<u64>) -> Result<i6
         params: ("finalized", false),
     };
 
-    match make_rpc_call::<_, BlockHeaderWithEmptyTransaction>(&params, timeout)
-        .await
-        .context("Failed to get latest block number")
+    match make_retrying_rpc_call::<_, BlockHeaderWithEmptyTransaction>(
+        &params,
+        timeout,
+        MAX_RETRIES.into(),
+    )
+    .await
+    .context("Failed to get latest block number")
     {
         Ok(blockheader) => Ok(convert_hex_string_to_i64(&blockheader.number)?),
         Err(e) => Err(e),
@@ -58,7 +66,12 @@ pub async fn get_full_block_by_number(
         params: (format!("0x{:x}", number), true),
     };
 
-    make_rpc_call::<_, BlockHeaderWithFullTransaction>(&params, timeout).await
+    make_retrying_rpc_call::<_, BlockHeaderWithFullTransaction>(
+        &params,
+        timeout,
+        MAX_RETRIES.into(),
+    )
+    .await
 }
 
 async fn make_rpc_call<T: Serialize, R: for<'de> Deserialize<'de>>(
@@ -109,6 +122,32 @@ async fn make_rpc_call<T: Serialize, R: for<'de> Deserialize<'de>>(
         Err(e) => {
             error!("Failed to read response body: {:?}", e);
             Err(e.into())
+        }
+    }
+}
+
+async fn make_retrying_rpc_call<T: Serialize, R: for<'de> Deserialize<'de>>(
+    params: &T,
+    timeout: Option<u64>,
+    max_retries: u32,
+) -> Result<R> {
+    let mut attempts = 0;
+    loop {
+        match make_rpc_call(params, timeout).await {
+            Ok(result) => return Ok(result),
+            Err(e) => {
+                attempts += 1;
+                if attempts > max_retries {
+                    warn!("Operation failed with error: {:?}. Max retries reached", e);
+                    return Err(e);
+                }
+                let backoff = Duration::from_secs(2_u64.pow(attempts));
+                warn!(
+                    "Operation failed with error: {:?}. Retrying in {:?} (Attempt {}/{})",
+                    e, backoff, attempts, max_retries
+                );
+                sleep(backoff).await;
+            }
         }
     }
 }
