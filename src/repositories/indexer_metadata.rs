@@ -3,9 +3,10 @@ use sqlx::{Pool, Postgres};
 use std::sync::Arc;
 use tracing::error;
 
-use super::model::ModelError;
+use super::repository::RepositoryError;
 
 #[derive(Debug, Deserialize, sqlx::FromRow)]
+#[allow(dead_code)]
 pub struct IndexMetadata {
     pub id: i64,
     pub current_latest_block_number: i64,
@@ -14,31 +15,32 @@ pub struct IndexMetadata {
     pub updated_at: chrono::DateTime<chrono::Utc>,
 }
 
-pub trait IndexMetadataModelTrait {
-    fn new(pool: Arc<Pool<Postgres>>) -> Self;
-    async fn get_index_metadata(&self) -> Result<Option<IndexMetadata>, ModelError>;
-    async fn set_is_backfilling(&self, is_backfilling: bool) -> Result<(), ModelError>;
+pub trait IndexMetadataRepositoryTrait {
+    async fn get_index_metadata(&self) -> Result<Option<IndexMetadata>, RepositoryError>;
+    async fn set_is_backfilling(&self, is_backfilling: bool) -> Result<(), RepositoryError>;
     async fn set_initial_indexing_status(
         &self,
         current_latest_block_number: i64,
         indexing_starting_block_number: i64,
         is_backfilling: bool,
-    ) -> Result<(), ModelError>;
+    ) -> Result<(), RepositoryError>;
     async fn update_latest_quick_index_block_number(
         &self,
         block_number: i64,
-    ) -> Result<(), ModelError>;
+    ) -> Result<(), RepositoryError>;
 }
 
 // Model is used to interact with the database
-pub struct IndexMetadataModel(Arc<Pool<Postgres>>);
+pub struct IndexMetadataRepository(Arc<Pool<Postgres>>);
 
-impl IndexMetadataModelTrait for IndexMetadataModel {
-    fn new(pool: Arc<Pool<Postgres>>) -> Self {
-        IndexMetadataModel(pool)
+impl IndexMetadataRepository {
+    pub fn new(pool: Arc<Pool<Postgres>>) -> Self {
+        IndexMetadataRepository(pool)
     }
+}
 
-    async fn get_index_metadata(&self) -> Result<Option<IndexMetadata>, ModelError> {
+impl IndexMetadataRepositoryTrait for IndexMetadataRepository {
+    async fn get_index_metadata(&self) -> Result<Option<IndexMetadata>, RepositoryError> {
         let result = sqlx::query_as(
             r#"
             SELECT id, current_latest_block_number, indexing_starting_block_number, is_backfilling, updated_at
@@ -52,14 +54,14 @@ impl IndexMetadataModelTrait for IndexMetadataModel {
             Ok(result) => Some(result),
             Err(err) => match err {
                 sqlx::Error::RowNotFound => None,
-                _ => return Err(ModelError::DatabaseError(err)),
+                _ => return Err(RepositoryError::DatabaseError(err)),
             },
         };
 
         Ok(result)
     }
 
-    async fn set_is_backfilling(&self, is_backfilling: bool) -> Result<(), ModelError> {
+    async fn set_is_backfilling(&self, is_backfilling: bool) -> Result<(), RepositoryError> {
         let result = sqlx::query(
             r#"
             UPDATE indexer_metadata
@@ -76,7 +78,7 @@ impl IndexMetadataModelTrait for IndexMetadataModel {
                 "Failed to set is_backfilling, affecting {} rows",
                 result.rows_affected()
             );
-            return Err(ModelError::UpdateError(
+            return Err(RepositoryError::UpdateError(
                 "Failed to set is_backfilling".to_owned(),
             ));
         }
@@ -89,7 +91,7 @@ impl IndexMetadataModelTrait for IndexMetadataModel {
         current_latest_block_number: i64,
         indexing_starting_block_number: i64,
         is_backfilling: bool,
-    ) -> Result<(), ModelError> {
+    ) -> Result<(), RepositoryError> {
         // Check if there's already an entry, if it does then we can skip and only update.
         let result = sqlx::query(
             r#"
@@ -118,7 +120,7 @@ impl IndexMetadataModelTrait for IndexMetadataModel {
 
             if result.rows_affected() != 1 {
                 error!("Failed to update initial indexing status");
-                return Err(ModelError::UpdateError(
+                return Err(RepositoryError::UpdateError(
                     "Failed to update initial indexing status".to_owned(),
                 ));
             }
@@ -147,7 +149,7 @@ impl IndexMetadataModelTrait for IndexMetadataModel {
 
         if result.rows_affected() != 1 {
             error!("Failed to insert initial indexing status");
-            return Err(ModelError::UpdateError(
+            return Err(RepositoryError::InsertError(
                 "Failed to insert initial indexing status".to_owned(),
             ));
         }
@@ -158,7 +160,7 @@ impl IndexMetadataModelTrait for IndexMetadataModel {
     async fn update_latest_quick_index_block_number(
         &self,
         block_number: i64,
-    ) -> Result<(), ModelError> {
+    ) -> Result<(), RepositoryError> {
         let result = sqlx::query(
             r#"
             UPDATE indexer_metadata
@@ -175,7 +177,7 @@ impl IndexMetadataModelTrait for IndexMetadataModel {
                 "Failed to update latest quick index block number, affecting {} rows",
                 result.rows_affected()
             );
-            return Err(ModelError::UpdateError(
+            return Err(RepositoryError::UpdateError(
                 "Failed to update latest quick index block number".to_owned(),
             ));
         }
