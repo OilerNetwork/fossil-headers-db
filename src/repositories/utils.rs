@@ -1,45 +1,8 @@
-use core::error;
-use std::{fmt::Display, time::Duration};
+use std::time::Duration;
 
 use eyre::Error;
 use tokio::time::sleep;
 use tracing::warn;
-
-#[derive(Debug)]
-pub enum RepositoryError {
-    DatabaseError(sqlx::Error),
-    InsertError(String),
-    UpdateError(String),
-    UnexpectedError,
-}
-
-impl Display for RepositoryError {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        match self {
-            Self::DatabaseError(err) => err.fmt(f),
-            Self::InsertError(err_str) => err_str.fmt(f),
-            Self::UpdateError(err_str) => err_str.fmt(f),
-            Self::UnexpectedError => write!(f, "Unexpected model error"),
-        }
-    }
-}
-
-impl error::Error for RepositoryError {
-    fn source(&self) -> Option<&(dyn error::Error + 'static)> {
-        match self {
-            RepositoryError::DatabaseError(err) => Some(err),
-            RepositoryError::InsertError(_) => None,
-            RepositoryError::UpdateError(_) => None,
-            RepositoryError::UnexpectedError => None,
-        }
-    }
-}
-
-impl From<sqlx::Error> for RepositoryError {
-    fn from(err: sqlx::Error) -> Self {
-        RepositoryError::DatabaseError(err)
-    }
-}
 
 async fn retry_async<F, T>(mut operation: F, max_retries: u32) -> Result<T, Error>
 where

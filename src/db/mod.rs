@@ -13,7 +13,8 @@ use tokio::sync::OnceCell;
 use tokio::time::sleep;
 use tracing::{error, info, warn};
 
-#[cfg(test)]
+pub mod db;
+
 mod db_test;
 
 static DB_POOL: OnceCell<Arc<Pool<Postgres>>> = OnceCell::const_new();

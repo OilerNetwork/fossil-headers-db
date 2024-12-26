@@ -1,5 +1,5 @@
-pub mod service_batch;
-pub mod service_quick;
+pub mod batch_service;
+pub mod quick_service;
 
 // TODO
 // [x] 1. start a 'job' and add the job info to the job table, including statuses, etc

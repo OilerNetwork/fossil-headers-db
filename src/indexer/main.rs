@@ -6,48 +6,44 @@ use std::{
     thread::{self, JoinHandle},
 };
 
-use eyre::{Context, Result};
+use eyre::{anyhow, Context, Result};
 use fossil_headers_db::{
-    db::get_db_pool,
+    db::{db::DbConnection, get_db_pool},
     indexer::{
-        service_batch::{self, BatchIndexConfig},
-        service_quick::{self, QuickIndexConfig},
+        batch_service::{self, BatchIndexConfig},
+        quick_service::{self, QuickIndexConfig, QuickIndexer},
+    },
+    repositories::indexer_metadata::{
+        get_index_metadata, set_initial_indexing_status, IndexMetadata,
     },
     router, rpc,
 };
 use tracing::{error, info};
 use tracing_subscriber::{fmt, EnvFilter};
 
-use fossil_headers_db::repositories::{
-    indexer_metadata::{IndexMetadata, IndexMetadataRepository, IndexMetadataRepositoryTrait},
-    repository::RepositoryError,
-};
-
-pub async fn get_indexer_metadata() -> Result<IndexMetadata> {
-    let pool = get_db_pool().await?;
-    let model = IndexMetadataRepository::new(pool);
-
-    if let Some(metadata) = model.get_index_metadata().await? {
+pub async fn get_indexer_metadata(db: Arc<DbConnection>) -> Result<IndexMetadata> {
+    if let Some(metadata) = get_index_metadata(db.clone()).await? {
         return Ok(metadata);
     }
 
     let latest_block_number = rpc::get_latest_finalized_blocknumber(None).await?;
 
-    model
-        .set_initial_indexing_status(latest_block_number, latest_block_number, true)
-        .await?;
+    set_initial_indexing_status(db.clone(), latest_block_number, latest_block_number, true).await?;
 
-    if let Some(metadata) = model.get_index_metadata().await? {
+    if let Some(metadata) = get_index_metadata(db).await? {
         return Ok(metadata);
     }
 
-    Err(RepositoryError::UnexpectedError.into())
+    Err(anyhow!("Failed to get indexer metadata"))
 }
 
 #[tokio::main]
 pub async fn main() -> Result<()> {
     // Initialize tracing subscriber
     fmt().with_env_filter(EnvFilter::from_default_env()).init();
+
+    // Setup database connection
+    let db = DbConnection::new(None).await?;
 
     info!("Starting Indexer");
 
@@ -56,7 +52,7 @@ pub async fn main() -> Result<()> {
     setup_ctrlc_handler(Arc::clone(&should_terminate))?;
 
     // Start by checking and updating the current status in the db.
-    let indexing_metadata = get_indexer_metadata().await?;
+    let indexing_metadata = get_indexer_metadata(db.clone()).await?;
     let router_terminator = Arc::clone(&should_terminate);
 
     // Setup the router which allows us to query health status and operations
@@ -77,20 +73,21 @@ pub async fn main() -> Result<()> {
     // Start the quick indexer
     let quick_index_config = QuickIndexConfig {
         starting_block: indexing_metadata.indexing_starting_block_number,
+        max_retries: 10,
+        poll_interval: 10,
+        rpc_timeout: 300,
     };
-    let quick_index_terminator = Arc::clone(&should_terminate);
+    let quick_indexer =
+        QuickIndexer::new(quick_index_config, db.clone(), should_terminate.clone()).await;
 
     let quick_indexer_handle = thread::Builder::new()
-        .name("[quick_indexer]".to_owned())
+        .name("[quick_index]".to_owned())
         .spawn(move || {
             let rt = tokio::runtime::Runtime::new()?;
 
             info!("Starting quick indexer");
-            if let Err(e) = rt.block_on(service_quick::quick_index(
-                quick_index_config,
-                quick_index_terminator,
-            )) {
-                error!("[quick_indexer] unexpected error {}", e);
+            if let Err(e) = rt.block_on(quick_indexer.index()) {
+                error!("[quick_index] unexpected error {}", e);
             }
             Ok(())
         })?;
@@ -102,16 +99,16 @@ pub async fn main() -> Result<()> {
     let batch_index_terminator = Arc::clone(&should_terminate);
 
     let batch_indexer_handle = thread::Builder::new()
-        .name("[batch_indexer]".to_owned())
+        .name("[batch_index]".to_owned())
         .spawn(move || {
             let rt = tokio::runtime::Runtime::new()?;
 
             info!("Starting batch indexer");
-            if let Err(e) = rt.block_on(service_batch::batch_index(
+            if let Err(e) = rt.block_on(batch_service::batch_index(
                 batch_index_config,
                 batch_index_terminator,
             )) {
-                error!("[batch_indexer] unexpected error {}", e);
+                error!("[batch_index] unexpected error {}", e);
             }
             Ok(())
         })?;

@@ -1,37 +1,26 @@
-use eyre::Result;
-use sqlx::{Pool, Postgres, QueryBuilder};
 use std::sync::Arc;
+
+use eyre::{anyhow, Result};
+use sqlx::{query_builder::Separated, Postgres, QueryBuilder};
 use tracing::{error, info, warn};
 
-use crate::{rpc::BlockHeaderWithFullTransaction, utils::convert_hex_string_to_i64};
+use crate::{
+    db::db::DbConnection, rpc::BlockHeaderWithFullTransaction, utils::convert_hex_string_to_i64,
+};
 
-use super::repository::RepositoryError;
+pub async fn write_blockheader(
+    db: Arc<DbConnection>,
+    block_header: BlockHeaderWithFullTransaction,
+) -> Result<()> {
+    let mut tx = db.as_ref().pool.begin().await?;
 
-pub trait BlockHeaderRepositoryTrait {
-    async fn write_blockheader(
-        &self,
-        block_header: BlockHeaderWithFullTransaction,
-    ) -> Result<(), RepositoryError>;
-}
+    let block_number = convert_hex_string_to_i64(&block_header.number)?;
+    let gas_limit = convert_hex_string_to_i64(&block_header.gas_limit)?;
+    let gas_used = convert_hex_string_to_i64(&block_header.gas_used)?;
+    let block_timestamp = convert_hex_string_to_i64(&block_header.timestamp)?;
 
-// Model is used to interact with the database
-pub struct BlockHeaderRepository(Arc<Pool<Postgres>>);
-
-impl BlockHeaderRepository {
-    pub fn new(pool: Arc<Pool<Postgres>>) -> Self {
-        BlockHeaderRepository(pool)
-    }
-}
-
-impl BlockHeaderRepositoryTrait for BlockHeaderRepository {
-    async fn write_blockheader(
-        &self,
-        block_header: BlockHeaderWithFullTransaction,
-    ) -> Result<(), RepositoryError> {
-        let mut tx = self.0.begin().await?;
-
-        // Insert block header
-        let result = sqlx::query(
+    // Insert block header
+    let result = sqlx::query(
             r#"
             INSERT INTO blockheaders (
                 block_hash, number, gas_limit, gas_used, base_fee_per_gas,
@@ -67,9 +56,9 @@ impl BlockHeaderRepositoryTrait for BlockHeaderRepository {
             "#,
         )
         .bind(&block_header.hash)
-        .bind(convert_hex_string_to_i64(&block_header.number))
-        .bind(convert_hex_string_to_i64(&block_header.gas_limit))
-        .bind(convert_hex_string_to_i64(&block_header.gas_used))
+        .bind(&block_number)
+        .bind(&gas_limit)
+        .bind(&gas_used)
         .bind(&block_header.base_fee_per_gas)
         .bind(&block_header.nonce)
         .bind(&block_header.transactions_root)
@@ -81,7 +70,7 @@ impl BlockHeaderRepositoryTrait for BlockHeaderRepository {
         .bind(&block_header.difficulty)
         .bind(&block_header.total_difficulty)
         .bind(&block_header.sha3_uncles)
-        .bind(convert_hex_string_to_i64(&block_header.timestamp))
+        .bind(&block_timestamp)
         .bind(&block_header.extra_data)
         .bind(&block_header.mix_hash)
         .bind(&block_header.withdrawals_root)
@@ -91,92 +80,93 @@ impl BlockHeaderRepositoryTrait for BlockHeaderRepository {
         .execute(&mut *tx) // Changed this line
         .await;
 
-        let result = match result {
-            Ok(result) => result,
-            Err(e) => {
-                error!(
-                    "Failed to insert block header for block number: {}.",
-                    block_header.number
-                );
-                error!("Detailed error: {}", e);
-                return Err(RepositoryError::InsertError(format!(
-                    "Failed to insert block header for block number: {}",
-                    block_header.number
-                )));
-            }
-        };
-
-        if result.rows_affected() == 0 {
-            warn!(
-                "Block already exists: -- block number: {}, block hash: {}",
-                block_header.number, block_header.hash
+    let result = match result {
+        Ok(result) => result,
+        Err(e) => {
+            error!(
+                "Failed to insert block header for block number: {}.",
+                block_header.number
             );
-            return Ok(());
-        } else {
-            info!(
-                "Inserted block number: {}, block hash: {}",
-                block_header.number, block_header.hash
-            );
+            error!("Detailed error: {}", e);
+            return Err(anyhow!(format!(
+                "Failed to insert block header for block number: {}",
+                block_header.number
+            )));
         }
+    };
 
-        // Insert transactions
-        if !block_header.transactions.is_empty() {
-            // TODO: probably need a on conflict clause here too.
-            let mut query_builder: QueryBuilder<Postgres> = QueryBuilder::new(
-                "INSERT INTO transactions (
+    if result.rows_affected() == 0 {
+        warn!(
+            "Block already exists: -- block number: {}, block hash: {}",
+            block_header.number, block_header.hash
+        );
+        return Ok(());
+    } else {
+        info!(
+            "Inserted block number: {}, block hash: {}",
+            block_header.number, block_header.hash
+        );
+    }
+
+    // Insert transactions
+    if !block_header.transactions.is_empty() {
+        // TODO: probably need a on conflict clause here too.
+        let mut query_builder: QueryBuilder<Postgres> = QueryBuilder::new(
+            "INSERT INTO transactions (
                     block_number, transaction_hash, transaction_index,
                     from_addr, to_addr, value, gas_price,
                     max_priority_fee_per_gas, max_fee_per_gas, gas, chain_id
                 ) ",
-            );
+        );
 
-            query_builder.push_values(block_header.transactions.iter(), |mut b, tx| {
-                b.push_bind(convert_hex_string_to_i64(&tx.block_number))
+        query_builder.push_values(
+            block_header.transactions.iter(),
+            |mut b: Separated<'_, '_, Postgres, &'static str>, tx| {
+                // Convert values and unwrap_or_default() to handle errors
+                let tx_block_number =
+                    convert_hex_string_to_i64(&tx.block_number).unwrap_or_default();
+                let tx_index = convert_hex_string_to_i64(&tx.transaction_index).unwrap_or_default();
+
+                b.push_bind(tx_block_number)
                     .push_bind(&tx.hash)
-                    .push_bind(convert_hex_string_to_i64(&tx.transaction_index))
+                    .push_bind(tx_index)
                     .push_bind(&tx.from)
                     .push_bind(&tx.to)
                     .push_bind(&tx.value)
-                    // Use "0" as the default value if gas_price is None
                     .push_bind(tx.gas_price.as_deref().unwrap_or("0"))
                     .push_bind(tx.max_priority_fee_per_gas.as_deref().unwrap_or("0"))
                     .push_bind(tx.max_fee_per_gas.as_deref().unwrap_or("0"))
                     .push_bind(&tx.gas)
                     .push_bind(&tx.chain_id);
-            });
+            },
+        );
+        query_builder.push(" ON CONFLICT (transaction_hash) DO UPDATE");
 
-            query_builder.push(" ON CONFLICT (transaction_hash) DO UPDATE");
-
-            let query = query_builder.build();
-            let result = match query.execute(&mut *tx).await {
-                Ok(result) => result,
-                Err(e) => {
-                    error!("Failed to insert transactions");
-                    error!("Detailed error: {}", e);
-                    return Err(RepositoryError::InsertError(
-                        "Failed to insert transactions".to_string(),
-                    ));
-                }
-            };
-
-            info!(
-                "Inserted {} transactions for block {}",
-                result.rows_affected(),
-                block_header.number
-            );
-        }
-
-        match tx.commit().await {
-            Ok(_) => (),
+        let query = query_builder.build();
+        let result = match query.execute(&mut *tx).await {
+            Ok(result) => result,
             Err(e) => {
-                error!("Failed to commit transaction: {}", e);
-                return Err(RepositoryError::UpdateError(
-                    "Failed to commit transaction".to_string(),
-                ));
+                error!("Failed to insert transactions");
+                error!("Detailed error: {}", e);
+                return Err(anyhow!("Failed to insert transactions".to_string(),));
             }
         };
-        Ok(())
+
+        info!(
+            "Inserted {} transactions for block {}",
+            result.rows_affected(),
+            block_header.number
+        );
     }
+
+    match tx.commit().await {
+        Ok(_) => (),
+        Err(e) => {
+            error!("Failed to commit transaction: {}", e);
+            return Err(anyhow!("Failed to commit transaction".to_string(),));
+        }
+    };
+    Ok(())
 }
 
 #[cfg(test)]
