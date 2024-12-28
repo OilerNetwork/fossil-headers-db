@@ -1,8 +1,9 @@
-use eyre::{Context, Result};
-use futures_util::future::join_all;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
-use std::time::{self, Duration};
+use std::time::Duration;
+
+use eyre::{Context, Result};
+use futures_util::future::join_all;
 use tokio::task;
 use tracing::{error, info, warn};
 
@@ -250,7 +251,7 @@ async fn chain_update_blocks(
                     "No new block finalized. Latest: {}. Sleeping for {}s...",
                     new_latest_block, POLL_INTERVAL
                 );
-                async_std::task::sleep(time::Duration::from_secs(POLL_INTERVAL)).await;
+                async_std::task::sleep(Duration::from_secs(POLL_INTERVAL)).await;
             }
         }
     }

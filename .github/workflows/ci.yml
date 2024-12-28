@@ -38,3 +38,14 @@ jobs:
       - name: Run tests
         run: cargo test --all --verbose
 
+      - name: Install Tarpaulin
+        run: cargo install cargo-tarpaulin
+
+      - name: Generate coverage
+        run: cargo tarpaulin --out Html
+
+      - name: Upload coverage artifact
+        uses: actions/upload-artifact@v3
+        with:
+          name: coverage-report
+          path: target/tarpaulin-report
