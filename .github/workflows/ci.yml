@@ -3,7 +3,8 @@ name: Rust CI
 on:
   push:
     branches:
-      - [main, windsurf]
+      - main
+      - windsurf
   pull_request:
     branches:
       - main
