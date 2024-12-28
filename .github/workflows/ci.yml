@@ -43,10 +43,10 @@ jobs:
         run: cargo install cargo-tarpaulin
 
       - name: Generate coverage
-        run: cargo tarpaulin --out Html
+        run: cargo tarpaulin --out Html --output-dir target/tarpaulin-report
 
       - name: Upload coverage artifact
         uses: actions/upload-artifact@v3
         with:
           name: coverage-report
-          path: target/tarpaulin-report
+          path: target/tarpaulin-report/tarpaulin-report.html
