@@ -9,12 +9,24 @@ use tracing::{error, info, warn};
 use crate::db;
 use crate::rpc;
 
+/// Maximum number of retry attempts for operations
 const MAX_RETRIES: u64 = 10;
 
-// Seconds
+/// Polling interval in seconds
 const POLL_INTERVAL: u64 = 60;
+
+/// Operation timeout in seconds
 const TIMEOUT: u64 = 300;
 
+/// Fills gaps in the blockchain data within a specified range.
+/// 
+/// # Arguments
+/// * `start` - Optional starting block number
+/// * `end` - Optional ending block number
+/// * `should_terminate` - Flag to signal when filling should stop
+/// 
+/// # Returns
+/// * `Result<()>` - Ok if gap filling completes successfully
 pub async fn fill_gaps(
     start: Option<i64>,
     end: Option<i64>,
@@ -36,6 +48,15 @@ pub async fn fill_gaps(
     fill_null_rows(range_start_pointer, range_end, &should_terminate).await
 }
 
+/// Fills missing blocks in a specified range of the blockchain.
+/// 
+/// # Arguments
+/// * `range_start_pointer` - Starting block number
+/// * `search_end` - Ending block number
+/// * `should_terminate` - Flag to signal termination
+/// 
+/// # Returns
+/// * `Result<()>` - Ok if all missing blocks are processed
 async fn fill_missing_blocks_in_range(
     mut range_start_pointer: i64,
     search_end: i64,
@@ -66,6 +87,15 @@ async fn fill_missing_blocks_in_range(
     Ok(())
 }
 
+/// Fills rows that contain null data in the specified range.
+/// 
+/// # Arguments
+/// * `search_start` - Starting block number
+/// * `search_end` - Ending block number
+/// * `should_terminate` - Flag to signal termination
+/// 
+/// # Returns
+/// * `Result<()>` - Ok if all null data is processed
 async fn fill_null_rows(
     search_start: i64,
     search_end: i64,
@@ -107,6 +137,14 @@ async fn fill_null_rows(
     Ok(())
 }
 
+/// Processes a single missing block.
+/// 
+/// # Arguments
+/// * `block_number` - Block number to process
+/// * `range_start_pointer` - Current range start pointer
+/// 
+/// # Returns
+/// * `Result<bool>` - True if block was processed successfully
 async fn process_missing_block(block_number: i64, range_start_pointer: &mut i64) -> Result<bool> {
     for i in 0..MAX_RETRIES {
         match rpc::get_full_block_by_number(block_number, Some(TIMEOUT)).await {
@@ -125,6 +163,13 @@ async fn process_missing_block(block_number: i64, range_start_pointer: &mut i64)
     Ok(false)
 }
 
+/// Gets the ending block number for range operations.
+/// 
+/// # Arguments
+/// * `end` - Optional ending block number
+/// 
+/// # Returns
+/// * `Result<i64>` - Calculated end block number
 async fn get_range_end(end: Option<i64>) -> Result<i64> {
     Ok(match end {
         Some(s) => s,
@@ -134,6 +179,16 @@ async fn get_range_end(end: Option<i64>) -> Result<i64> {
     })
 }
 
+/// Updates the database with new blocks starting from a specified point.
+/// 
+/// # Arguments
+/// * `start` - Optional starting block number
+/// * `end` - Optional ending block number
+/// * `size` - Number of concurrent update operations
+/// * `should_terminate` - Flag to signal when updates should stop
+/// 
+/// # Returns
+/// * `Result<()>` - Ok if updates complete successfully
 pub async fn update_from(
     start: Option<i64>,
     end: Option<i64>,
@@ -156,6 +211,16 @@ pub async fn update_from(
     }
 }
 
+/// Continuously updates blocks in the chain.
+/// 
+/// # Arguments
+/// * `range_start` - Starting block number
+/// * `last_block` - Last known block number
+/// * `size` - Number of concurrent operations
+/// * `should_terminate` - Flag to signal termination
+/// 
+/// # Returns
+/// * `Result<()>` - Ok if updates complete successfully
 async fn chain_update_blocks(
     mut range_start: i64,
     mut last_block: i64,
@@ -193,6 +258,16 @@ async fn chain_update_blocks(
     Ok(())
 }
 
+/// Updates blocks within a specified range.
+/// 
+/// # Arguments
+/// * `range_start` - Starting block number
+/// * `last_block` - Last block number
+/// * `size` - Number of concurrent operations
+/// * `should_terminate` - Flag to signal termination
+/// 
+/// # Returns
+/// * `Result<()>` - Ok if updates complete successfully
 async fn update_blocks(
     range_start: i64,
     last_block: i64,
@@ -233,6 +308,13 @@ async fn update_blocks(
     Ok(())
 }
 
+/// Processes a single block.
+/// 
+/// # Arguments
+/// * `block_number` - Block number to process
+/// 
+/// # Returns
+/// * `Result<()>` - Ok if block is processed successfully
 async fn process_block(block_number: i64) -> Result<()> {
     for i in 0..MAX_RETRIES {
         match rpc::get_full_block_by_number(block_number, Some(TIMEOUT)).await {
@@ -259,6 +341,13 @@ async fn process_block(block_number: i64) -> Result<()> {
     Err(eyre::anyhow!("Failed to process block {}", block_number))
 }
 
+/// Gets the first missing block number.
+/// 
+/// # Arguments
+/// * `start` - Optional starting block number
+/// 
+/// # Returns
+/// * `Result<i64>` - First missing block number
 async fn get_first_missing_block(start: Option<i64>) -> Result<i64> {
     Ok(match start {
         Some(s) => s,
@@ -271,13 +360,23 @@ async fn get_first_missing_block(start: Option<i64>) -> Result<i64> {
     })
 }
 
+/// Gets the last block number to process.
+/// 
+/// # Arguments
+/// * `end` - Optional ending block number
+/// 
+/// # Returns
+/// * `Result<i64>` - Last block number
 async fn get_last_block(end: Option<i64>) -> Result<i64> {
+    info!("Entering get_last_block with end={:?}", end);
     let latest_block: i64 = rpc::get_latest_finalized_blocknumber(Some(TIMEOUT))
         .await
         .context("Failed to get latest block number")?;
-
-    Ok(match end {
+    
+    let result = match end {
         Some(s) => s.min(latest_block),
         None => latest_block,
-    })
+    };
+    info!("Exiting get_last_block with result={}", result);
+    Ok(result)
 }

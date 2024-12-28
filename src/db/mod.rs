@@ -15,9 +15,25 @@ use tracing::{error, info, warn};
 #[cfg(test)]
 mod db_test;
 
+/// Global database connection pool.
+/// Uses OnceCell to ensure single initialization.
 static DB_POOL: OnceCell<Arc<Pool<Postgres>>> = OnceCell::const_new();
+
+/// Maximum number of concurrent database connections.
+/// This limit helps prevent overloading the database server.
 pub const DB_MAX_CONNECTIONS: u32 = 50;
 
+/// Retrieves or initializes the database connection pool.
+/// 
+/// This function implements a singleton pattern using OnceCell to ensure
+/// that only one connection pool is created for the entire application.
+/// 
+/// # Returns
+/// * `Result<Arc<Pool<Postgres>>>` - Thread-safe reference to the connection pool
+/// 
+/// # Errors
+/// * If database connection string is not set in environment
+/// * If connection to database fails
 pub async fn get_db_pool() -> Result<Arc<Pool<Postgres>>> {
     match DB_POOL.get() {
         Some(pool) => Ok(pool.clone()),
@@ -41,6 +57,13 @@ pub async fn get_db_pool() -> Result<Arc<Pool<Postgres>>> {
     }
 }
 
+/// Verifies that the database connection is working.
+/// 
+/// Executes a simple SELECT query to ensure the database is accessible
+/// and responding to queries.
+/// 
+/// # Returns
+/// * `Result<()>` - Ok if connection test succeeds, Err otherwise
 pub async fn check_db_connection() -> Result<()> {
     let pool = get_db_pool().await.context("Failed to get database pool")?;
     sqlx::query("SELECT 1")
@@ -50,6 +73,14 @@ pub async fn check_db_connection() -> Result<()> {
     Ok(())
 }
 
+/// Creates the necessary database tables if they don't exist.
+/// 
+/// Executes SQL scripts to create:
+/// 1. blockheaders table - Stores blockchain header information
+/// 2. transactions table - Stores transaction data
+/// 
+/// # Returns
+/// * `Result<()>` - Ok if tables are created successfully, Err otherwise
 pub async fn create_tables() -> Result<()> {
     let pool = get_db_pool().await?;
     sqlx::query(include_str!("./sql/blockheaders_table.sql"))
@@ -68,6 +99,13 @@ pub async fn create_tables() -> Result<()> {
  *
  * @Returns blocknumber, else -1 if table is empty
  */
+/// Retrieves the block number of the latest stored block header.
+/// 
+/// # Returns
+/// * `Result<i64>` - The highest block number in the database, or -1 if the table is empty
+/// 
+/// # Retries
+/// This function will retry up to 3 times in case of transient errors
 pub async fn get_last_stored_blocknumber() -> Result<i64> {
     const MAX_RETRIES: u32 = 3;
 
@@ -93,6 +131,14 @@ pub async fn get_last_stored_blocknumber() -> Result<i64> {
 /**
  * Returns the first missing blocknumber in between provided numbers (inclusive)
  */
+/// Finds the first missing block number in a specified range.
+/// 
+/// # Arguments
+/// * `start` - The starting block number (inclusive)
+/// * `end` - The ending block number (inclusive)
+/// 
+/// # Returns
+/// * `Result<Option<i64>>` - The first missing block number, or None if no gaps exist
 pub async fn find_first_gap(start: i64, end: i64) -> Result<Option<i64>> {
     let pool = get_db_pool().await.context("Failed to get database pool")?;
     let result: Option<(i64,)> = sqlx::query_as(
@@ -120,6 +166,14 @@ pub async fn find_first_gap(start: i64, end: i64) -> Result<Option<i64>> {
  * This finds the null data by querying the blockheaders table.
  * Included fields is based on the reth primitives defined in https://reth.rs/docs/reth_primitives/struct.Header.html
  */
+/// Finds the block numbers with null data in a specified range.
+/// 
+/// # Arguments
+/// * `start` - The starting block number (inclusive)
+/// * `end` - The ending block number (inclusive)
+/// 
+/// # Returns
+/// * `Result<Vec<i64>>` - A list of block numbers with null data
 pub async fn find_null_data(start: i64, end: i64) -> Result<Vec<i64>> {
     let pool = get_db_pool().await.context("Failed to get database pool")?;
     let result: Vec<(i64,)> = sqlx::query_as(
@@ -152,6 +206,13 @@ pub async fn find_null_data(start: i64, end: i64) -> Result<Vec<i64>> {
     Ok(result.iter().map(|row| row.0).collect())
 }
 
+/// Writes a block header to the database.
+/// 
+/// # Arguments
+/// * `block_header` - The block header to write
+/// 
+/// # Returns
+/// * `Result<()>` - Ok if the block header is written successfully, Err otherwise
 pub async fn write_blockheader(block_header: BlockHeaderWithFullTransaction) -> Result<()> {
     let pool = get_db_pool().await?;
     let mut tx = pool.begin().await?;
@@ -283,6 +344,18 @@ pub async fn write_blockheader(block_header: BlockHeaderWithFullTransaction) -> 
     Ok(())
 }
 
+/// Retries an async operation with exponential backoff.
+/// 
+/// # Arguments
+/// * `operation` - The async operation to retry
+/// * `max_retries` - Maximum number of retry attempts
+/// 
+/// # Returns
+/// * `Result<T, Error>` - The operation result or error after all retries
+/// 
+/// # Type Parameters
+/// * `F` - The future type returned by the operation
+/// * `T` - The success type of the operation
 async fn retry_async<F, T>(mut operation: F, max_retries: u32) -> Result<T, Error>
 where
     F: FnMut() -> futures::future::BoxFuture<'static, Result<T, Error>>,
@@ -307,6 +380,13 @@ where
     }
 }
 
+/// Determines if an error is transient and should be retried.
+/// 
+/// # Arguments
+/// * `e` - The error to check
+/// 
+/// # Returns
+/// * `bool` - true if the error is considered transient
 fn is_transient_error(e: &Error) -> bool {
     // Check for database connection errors
     if let Some(db_err) = e.downcast_ref::<sqlx::Error>() {

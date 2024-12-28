@@ -6,19 +6,60 @@ edition = "2021"
 # See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
 
 [dependencies]
+# Provides async runtime support for std features
 async-std = "1.12.0"
+
+# Web framework for building robust APIs
 axum = { version = "0.7.5", features = ["macros"] }
+
+# Command line argument parsing with derive macros
 clap = { version = "4.5.7", features = ["derive"] }
+
+# Handles Ctrl+C signal for graceful shutdown
 ctrlc = "3.4.4"
+
+# Loads environment variables from .env files
 dotenvy = "0.15.7"
+
+# Provides utilities for working with asynchronous computations
 futures = "0.3.30"
+
+# Additional utilities for async streams and futures
 futures-util = "0.3.30"
+
+# HTTP client for making RPC calls to Ethereum nodes
 reqwest = { version = "0.12.4", features = [ "json" ] }
+
+# Serialization/deserialization framework
 serde = "1.0.203"
-sqlx = { version = "0.8.2", features = [ "runtime-tokio", "postgres", "chrono", "tls-rustls", "macros" ] }
-tokio = { version = "1.38.0", features = [ "rt", "rt-multi-thread", "macros" ] }
+
+# PostgreSQL async database driver with compile-time checked queries
+sqlx = { version = "0.8.2", features = [ 
+    "runtime-tokio",     # Use tokio as async runtime
+    "postgres",          # PostgreSQL support
+    "chrono",           # DateTime support
+    "tls-rustls",       # TLS support using rustls
+    "macros"            # SQL query macros
+] }
+
+# Async runtime and utilities
+tokio = { version = "1.38.0", features = [ 
+    "rt",               # Runtime support
+    "rt-multi-thread",  # Multi-threaded runtime
+    "macros"           # async/await macros
+] }
+
+# Structured logging framework
 tracing = "0.1.40"
+
+# Error handling and reporting
 eyre = "0.6.10"
+
+# Thread-safe lazy initialized static variables
 once_cell = "1.1.0"
+
+# Configurable logging subscriber with filtering
 tracing-subscriber = { version = "0.3.17", features = [ "env-filter" ] }
+
+# JSON serialization/deserialization for Ethereum RPC responses
 serde_json = "1.0.105"

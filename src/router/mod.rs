@@ -13,6 +13,18 @@ use crate::db::check_db_connection;
 
 mod handlers;
 
+/// Initializes and starts the HTTP router for the API server.
+/// 
+/// # Arguments
+/// * `should_terminate` - Flag to signal when the server should shut down
+/// 
+/// # Returns
+/// * `Result<()>` - Ok if the server starts and runs successfully
+/// 
+/// This function:
+/// 1. Creates the router with defined routes
+/// 2. Binds to the configured address
+/// 3. Serves requests until termination is signaled
 pub async fn initialize_router(should_terminate: Arc<AtomicBool>) -> Result<()> {
     let app = Router::new().route(
         "/",
@@ -39,6 +51,10 @@ pub async fn initialize_router(should_terminate: Arc<AtomicBool>) -> Result<()> 
     Ok(())
 }
 
+/// Waits for the shutdown signal and then shuts down the router.
+/// 
+/// # Arguments
+/// * `should_terminate` - Flag to signal when the server should shut down
 async fn shutdown_signal(should_terminate: Arc<AtomicBool>) {
     while !should_terminate.load(Ordering::SeqCst) {
         sleep(Duration::from_secs(10)).await;
