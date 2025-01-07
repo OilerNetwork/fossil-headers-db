@@ -1,5 +1,6 @@
 use eyre::{anyhow, Report, Result};
 use serde::Deserialize;
+use sqlx::{Execute, Postgres};
 use std::sync::Arc;
 use tracing::error;
 
@@ -20,7 +21,7 @@ pub async fn get_index_metadata(db: Arc<DbConnection>) -> Result<Option<IndexMet
     let result: Result<IndexMetadata, sqlx::Error>  = sqlx::query_as(
             r#"
             SELECT id, current_latest_block_number, indexing_starting_block_number, is_backfilling, updated_at
-            FROM indexer_metadata
+            FROM index_metadata
             "#,
         )
         .fetch_one(&db.pool)
@@ -44,7 +45,7 @@ pub async fn set_is_backfilling(db: Arc<DbConnection>, is_backfilling: bool) -> 
     let db = db.as_ref();
     let result = sqlx::query(
         r#"
-            UPDATE indexer_metadata
+            UPDATE index_metadata
             SET is_backfilling = $1,
             updated_at = CURRENT_TIMESTAMP
             "#,
@@ -74,7 +75,7 @@ pub async fn set_initial_indexing_status(
     let result = sqlx::query(
         r#"
             SELECT id
-            FROM indexer_metadata
+            FROM index_metadata
             "#,
     )
     .fetch_one(&db.pool)
@@ -83,7 +84,7 @@ pub async fn set_initial_indexing_status(
     if result.is_ok() {
         let result = sqlx::query(
             r#"
-                UPDATE indexer_metadata
+                UPDATE index_metadata
                 SET current_latest_block_number = $1,
                     indexing_starting_block_number = $2,
                     is_backfilling = $3,
@@ -108,7 +109,7 @@ pub async fn set_initial_indexing_status(
 
     let result = sqlx::query(
         r#"
-            INSERT INTO indexer_metadata (
+            INSERT INTO index_metadata (
                 current_latest_block_number,
                 indexing_starting_block_number,
                 is_backfilling
@@ -135,29 +136,20 @@ pub async fn set_initial_indexing_status(
     Ok(())
 }
 
-pub async fn update_latest_quick_index_block_number(
-    db: Arc<DbConnection>,
+pub async fn update_latest_quick_index_block_number_query(
+    db_tx: &mut sqlx::Transaction<'_, Postgres>,
     block_number: i64,
 ) -> Result<()> {
-    let db = db.as_ref();
-    let result = sqlx::query(
+    sqlx::query(
         r#"
-            UPDATE indexer_metadata
+            UPDATE index_metadata
             SET current_latest_block_number = $1,
             updated_at = CURRENT_TIMESTAMP
             "#,
     )
     .bind(block_number)
-    .execute(&db.pool)
+    .execute(&mut **db_tx)
     .await?;
-
-    if result.rows_affected() != 1 {
-        error!(
-            "Failed to update latest quick index block number, affecting {} rows",
-            result.rows_affected()
-        );
-        return Err(anyhow!("Failed to update latest quick index block number"));
-    }
 
     Ok(())
 }

@@ -1,4 +1,5 @@
 use crate::utils::convert_hex_string_to_i64;
+use core::num;
 use eyre::{Context, Result};
 use once_cell::sync::Lazy;
 use reqwest::Client;
@@ -21,12 +22,12 @@ pub struct RpcResponse<T> {
 #[derive(Serialize)]
 struct RpcRequest<'a, T> {
     jsonrpc: &'a str,
-    id: &'a str,
+    id: String,
     method: &'a str,
     params: T,
 }
 
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Deserialize, Clone)]
 pub struct Transaction {
     pub hash: String,
     #[serde(rename(deserialize = "blockNumber"))]
@@ -142,7 +143,7 @@ pub async fn get_latest_finalized_blocknumber(timeout: Option<u64>) -> Result<i6
     // TODO: Id should be different on every request, this is how request are identified by us and by the node.
     let params = RpcRequest {
         jsonrpc: "2.0",
-        id: "0",
+        id: "0".to_string(),
         method: "eth_getBlockByNumber",
         params: ("finalized", false),
     };
@@ -162,12 +163,30 @@ pub async fn get_full_block_by_number(
 ) -> Result<BlockHeaderWithFullTransaction> {
     let params = RpcRequest {
         jsonrpc: "2.0",
-        id: "0",
+        id: "0".to_string(),
         method: "eth_getBlockByNumber",
         params: (format!("0x{:x}", number), true),
     };
 
     make_rpc_call::<_, BlockHeaderWithFullTransaction>(&params, timeout).await
+}
+
+// TODO: Make this work.
+pub async fn batch_get_full_block_by_number(
+    numbers: Vec<i64>,
+    timeout: Option<u64>,
+) -> Result<Vec<BlockHeaderWithFullTransaction>> {
+    let mut params = Vec::new();
+    for number in numbers {
+        let num_str = number.to_string();
+        params.push(RpcRequest {
+            jsonrpc: "2.0",
+            id: num_str,
+            method: "eth_getBlockByNumber",
+            params: (format!("0x{:x}", number), true),
+        });
+    }
+    make_rpc_call::<_, Vec<BlockHeaderWithFullTransaction>>(&params, timeout).await
 }
 
 async fn make_rpc_call<T: Serialize, R: for<'de> Deserialize<'de>>(

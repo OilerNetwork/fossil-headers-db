@@ -13,7 +13,7 @@ use fossil_headers_db::{
         batch_service::{self, BatchIndexConfig},
         quick_service::{self, QuickIndexConfig, QuickIndexer},
     },
-    repositories::indexer_metadata::{
+    repositories::index_metadata::{
         get_index_metadata, set_initial_indexing_status, IndexMetadata,
     },
     router, rpc,
@@ -21,7 +21,7 @@ use fossil_headers_db::{
 use tracing::{error, info};
 use tracing_subscriber::{fmt, EnvFilter};
 
-pub async fn get_indexer_metadata(db: Arc<DbConnection>) -> Result<IndexMetadata> {
+pub async fn get_base_index_metadata(db: Arc<DbConnection>) -> Result<IndexMetadata> {
     if let Some(metadata) = get_index_metadata(db.clone()).await? {
         return Ok(metadata);
     }
@@ -40,9 +40,11 @@ pub async fn get_indexer_metadata(db: Arc<DbConnection>) -> Result<IndexMetadata
 #[tokio::main]
 pub async fn main() -> Result<()> {
     // Initialize tracing subscriber
+    dotenvy::dotenv();
     fmt().with_env_filter(EnvFilter::from_default_env()).init();
 
     // Setup database connection
+    info!("Connecting to DB");
     let db = DbConnection::new(None).await?;
 
     info!("Starting Indexer");
@@ -52,7 +54,7 @@ pub async fn main() -> Result<()> {
     setup_ctrlc_handler(Arc::clone(&should_terminate))?;
 
     // Start by checking and updating the current status in the db.
-    let indexing_metadata = get_indexer_metadata(db.clone()).await?;
+    let indexing_metadata = get_base_index_metadata(db.clone()).await?;
     let router_terminator = Arc::clone(&should_terminate);
 
     // Setup the router which allows us to query health status and operations
@@ -71,12 +73,7 @@ pub async fn main() -> Result<()> {
         })?;
 
     // Start the quick indexer
-    let quick_index_config = QuickIndexConfig {
-        starting_block: indexing_metadata.indexing_starting_block_number,
-        max_retries: 10,
-        poll_interval: 10,
-        rpc_timeout: 300,
-    };
+    let quick_index_config = QuickIndexConfig::default();
     let quick_indexer =
         QuickIndexer::new(quick_index_config, db.clone(), should_terminate.clone()).await;
 
