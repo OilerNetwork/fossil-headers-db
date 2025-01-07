@@ -4,7 +4,7 @@ use sqlx::Postgres;
 use std::sync::Arc;
 use tracing::error;
 
-use crate::db::db::DbConnection;
+use crate::db::DbConnection;
 
 #[derive(Debug, Deserialize, sqlx::FromRow)]
 #[allow(dead_code)]
@@ -16,6 +16,8 @@ pub struct IndexMetadata {
     pub updated_at: chrono::DateTime<chrono::Utc>,
 }
 
+// TODO: allow dead code for now. Adding tests in future PRs should allow us to remove this.
+#[allow(dead_code)]
 pub async fn get_index_metadata(db: Arc<DbConnection>) -> Result<Option<IndexMetadata>> {
     let db = db.as_ref();
     let result: Result<IndexMetadata, sqlx::Error>  = sqlx::query_as(
@@ -41,6 +43,7 @@ pub async fn get_index_metadata(db: Arc<DbConnection>) -> Result<Option<IndexMet
     Ok(result)
 }
 
+#[allow(dead_code)]
 pub async fn set_is_backfilling(db: Arc<DbConnection>, is_backfilling: bool) -> Result<()> {
     let db = db.as_ref();
     let result = sqlx::query(
@@ -65,6 +68,7 @@ pub async fn set_is_backfilling(db: Arc<DbConnection>, is_backfilling: bool) -> 
     Ok(())
 }
 
+#[allow(dead_code)]
 pub async fn set_initial_indexing_status(
     db: Arc<DbConnection>,
     current_latest_block_number: i64,
@@ -136,6 +140,8 @@ pub async fn set_initial_indexing_status(
     Ok(())
 }
 
+// TODO: allow dead code for now. Adding tests in future PRs should allow us to remove this.
+#[allow(dead_code)]
 pub async fn update_latest_quick_index_block_number_query(
     db_tx: &mut sqlx::Transaction<'_, Postgres>,
     block_number: i64,

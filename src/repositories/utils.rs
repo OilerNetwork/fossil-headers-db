@@ -4,6 +4,9 @@ use eyre::Error;
 use tokio::time::sleep;
 use tracing::warn;
 
+// TODO: revisit this to ensure that these 2 functions are still useful in current setup
+
+#[allow(dead_code)]
 async fn retry_async<F, T>(mut operation: F, max_retries: u32) -> Result<T, Error>
 where
     F: FnMut() -> futures::future::BoxFuture<'static, Result<T, Error>>,
@@ -28,12 +31,12 @@ where
     }
 }
 
+#[allow(dead_code)]
 fn is_transient_error(e: &Error) -> bool {
     // Check for database connection errors
     if let Some(db_err) = e.downcast_ref::<sqlx::Error>() {
         match db_err {
-            sqlx::Error::Io(_) => true,
-            sqlx::Error::PoolTimedOut => true,
+            sqlx::Error::Io(_) | sqlx::Error::PoolTimedOut => true,
             sqlx::Error::Database(db_err) => {
                 // Check database-specific error codes if needed
                 db_err.code().map_or(false, |code| {

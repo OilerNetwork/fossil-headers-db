@@ -1,11 +1,13 @@
-use eyre::{Context, ContextCompat, Result};
-use sqlx::{query_builder::Separated, Execute, Postgres, QueryBuilder};
+use eyre::{ContextCompat, Result};
+use sqlx::{query_builder::Separated, Postgres, QueryBuilder};
 
 use crate::{
     rpc::{BlockHeaderWithFullTransaction, Transaction},
     utils::convert_hex_string_to_i64,
 };
 
+// TODO: allow dead code for now. Adding tests in future PRs should allow us to remove this.
+#[allow(dead_code)]
 #[derive(Debug)]
 pub struct TransactionFormatted {
     pub hash: String,
@@ -21,6 +23,8 @@ pub struct TransactionFormatted {
     pub chain_id: Option<String>,
 }
 
+// TODO: allow dead code for now. Adding tests in future PRs should allow us to remove this.
+#[allow(dead_code)]
 #[derive(Debug)]
 pub struct BlockHeaderFormatted {
     pub gas_limit: i64,
@@ -47,6 +51,8 @@ pub struct BlockHeaderFormatted {
     pub parent_beacon_block_root: Option<String>,
 }
 
+// TODO: allow dead code for now. Adding tests in future PRs should allow us to remove this.
+#[allow(dead_code)]
 // Seems that using transaction with multi row inserts seem to be the fastest
 pub async fn insert_block_header_query(
     db_tx: &mut sqlx::Transaction<'_, Postgres>,
@@ -179,6 +185,8 @@ pub async fn insert_block_header_query(
     Ok(())
 }
 
+// TODO: allow dead code for now. Adding tests in future PRs should allow us to remove this.
+#[allow(dead_code)]
 pub async fn insert_block_txs_query(
     db_tx: &mut sqlx::Transaction<'_, Postgres>,
     transactions: Vec<Transaction>,
@@ -226,9 +234,9 @@ pub async fn insert_block_txs_query(
         formatted_transactions.iter(),
         |mut b: Separated<'_, '_, Postgres, &'static str>, tx| {
             // Convert values and unwrap_or_default() to handle errors
-            b.push_bind(&tx.block_number)
+            b.push_bind(tx.block_number)
                 .push_bind(&tx.hash)
-                .push_bind(&tx.transaction_index)
+                .push_bind(tx.transaction_index)
                 .push_bind(&tx.from)
                 .push_bind(&tx.to)
                 .push_bind(&tx.value)

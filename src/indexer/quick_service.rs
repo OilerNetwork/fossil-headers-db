@@ -12,7 +12,7 @@ use tokio::task;
 use tracing::{error, info, warn};
 
 use crate::{
-    db::db::DbConnection,
+    db::DbConnection,
     repositories::{
         block_header::insert_block_header_query,
         index_metadata::{get_index_metadata, update_latest_quick_index_block_number_query},

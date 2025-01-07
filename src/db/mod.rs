@@ -13,8 +13,6 @@ use tokio::sync::OnceCell;
 use tokio::time::sleep;
 use tracing::{error, info, warn};
 
-pub mod db;
-
 mod db_test;
 
 static DB_POOL: OnceCell<Arc<Pool<Postgres>>> = OnceCell::const_new();
@@ -324,3 +322,34 @@ fn is_transient_error(e: &Error) -> bool {
         false
     }
 }
+
+#[derive(Debug)]
+pub struct DbConnection {
+    pub pool: Pool<Postgres>,
+}
+
+impl DbConnection {
+    // TODO: allow dead code for now. Adding tests in future PRs should allow us to remove this.
+    #[allow(dead_code)]
+    pub async fn new(db_conn_string: Option<String>) -> Result<Arc<Self>> {
+        let mut conn_options: PgConnectOptions = match db_conn_string {
+            Some(conn_string) => conn_string.parse()?,
+            None => dotenvy::var("DB_CONNECTION_STRING")
+                .context("DB_CONNECTION_STRING must be set")?
+                .parse()?,
+        };
+
+        conn_options = conn_options
+            .log_slow_statements(tracing::log::LevelFilter::Debug, Duration::new(120, 0));
+
+        let pool = PgPoolOptions::new()
+            .max_connections(DB_MAX_CONNECTIONS)
+            .connect_with(conn_options)
+            .await?;
+
+        Ok(Arc::new(Self { pool }))
+    }
+}
+
+#[cfg(test)]
+mod tests {}

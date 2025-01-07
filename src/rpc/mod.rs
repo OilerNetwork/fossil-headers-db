@@ -1,5 +1,4 @@
 use crate::utils::convert_hex_string_to_i64;
-use core::num;
 use eyre::{Context, Result};
 use once_cell::sync::Lazy;
 use reqwest::Client;
@@ -171,7 +170,8 @@ pub async fn get_full_block_by_number(
     make_rpc_call::<_, BlockHeaderWithFullTransaction>(&params, timeout).await
 }
 
-// TODO: Make this work.
+// TODO: Make this work as expected
+#[allow(dead_code)]
 pub async fn batch_get_full_block_by_number(
     numbers: Vec<i64>,
     timeout: Option<u64>,

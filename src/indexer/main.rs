@@ -8,10 +8,10 @@ use std::{
 
 use eyre::{anyhow, Context, Result};
 use fossil_headers_db::{
-    db::db::DbConnection,
+    db::DbConnection,
     indexer::{
         batch_service::{self, BatchIndexConfig},
-        quick_service::{self, QuickIndexConfig, QuickIndexer},
+        quick_service::{QuickIndexConfig, QuickIndexer},
     },
     repositories::index_metadata::{
         get_index_metadata, set_initial_indexing_status, IndexMetadata,
@@ -39,8 +39,10 @@ pub async fn get_base_index_metadata(db: Arc<DbConnection>) -> Result<IndexMetad
 
 #[tokio::main]
 pub async fn main() -> Result<()> {
+    // TODO: this should be set to only be turned on if we're in dev mode
+    dotenvy::dotenv()?;
+
     // Initialize tracing subscriber
-    dotenvy::dotenv();
     fmt().with_env_filter(EnvFilter::from_default_env()).init();
 
     // Setup database connection
@@ -122,7 +124,17 @@ pub async fn main() -> Result<()> {
 
 fn wait_for_thread_completion(handles: Vec<JoinHandle<Result<()>>>) -> Result<()> {
     for handle in handles {
-        handle.join().unwrap()?;
+        match handle.join() {
+            Ok(Ok(())) => {
+                info!("Thread completed successfully");
+            }
+            Ok(Err(e)) => {
+                error!("Thread completed with an error: {:?}", e);
+            }
+            Err(e) => {
+                error!("Thread panicked: {:?}", e);
+            }
+        }
     }
 
     Ok(())
