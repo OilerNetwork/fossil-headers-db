@@ -43,7 +43,7 @@ pub async fn main() -> Result<()> {
     dotenvy::dotenv()?;
 
     // Initialize tracing subscriber
-    fmt().with_env_filter(EnvFilter::from_default_env()).init();
+    fmt().init();
 
     // Setup database connection
     info!("Connecting to DB");
