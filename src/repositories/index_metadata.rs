@@ -1,6 +1,6 @@
 use eyre::{anyhow, Report, Result};
 use serde::Deserialize;
-use sqlx::{Execute, Postgres};
+use sqlx::Postgres;
 use std::sync::Arc;
 use tracing::error;
 

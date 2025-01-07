@@ -8,7 +8,7 @@ use std::{
 
 use eyre::{anyhow, Context, Result};
 use fossil_headers_db::{
-    db::{db::DbConnection, get_db_pool},
+    db::db::DbConnection,
     indexer::{
         batch_service::{self, BatchIndexConfig},
         quick_service::{self, QuickIndexConfig, QuickIndexer},

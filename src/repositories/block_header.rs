@@ -173,13 +173,16 @@ pub async fn insert_block_header_query(
     );
 
     query_builder.build().execute(&mut **db_tx).await?;
-    
+
     insert_block_txs_query(db_tx, flattened_transactions).await?;
 
     Ok(())
 }
 
-pub async fn insert_block_txs_query(db_tx: &mut sqlx::Transaction<'_, Postgres>, transactions: Vec<Transaction>) -> Result<()> {
+pub async fn insert_block_txs_query(
+    db_tx: &mut sqlx::Transaction<'_, Postgres>,
+    transactions: Vec<Transaction>,
+) -> Result<()> {
     let mut query_builder: QueryBuilder<Postgres> = QueryBuilder::new(
         "INSERT INTO transactions (
                 block_number, transaction_hash, transaction_index,

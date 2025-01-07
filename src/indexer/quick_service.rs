@@ -6,10 +6,10 @@ use std::{
     time::Duration,
 };
 
-use eyre::{anyhow, Context, Result};
-use futures::future::{join_all, try_join_all};
+use eyre::{anyhow, Result};
+use futures::future::try_join_all;
 use tokio::task;
-use tracing::{debug, error, info, warn};
+use tracing::{error, info, warn};
 
 use crate::{
     db::db::DbConnection,
@@ -17,7 +17,7 @@ use crate::{
         block_header::insert_block_header_query,
         index_metadata::{get_index_metadata, update_latest_quick_index_block_number_query},
     },
-    rpc::{self, BlockHeaderWithFullTransaction},
+    rpc::{self},
 };
 
 #[derive(Debug)]
@@ -159,18 +159,24 @@ impl QuickIndexer {
                 }
             }
 
-            if has_err {
-                error!("[quick_index] Rerun from block: {}", starting_block);
+            if !has_err {
+                let mut db_tx = self.db.pool.begin().await?;
+
+                insert_block_header_query(&mut db_tx, block_headers).await?;
+                update_latest_quick_index_block_number_query(&mut db_tx, ending_block).await?;
+
+                // Commit at the end
+                db_tx.commit().await?;
+
+                info!(
+                    "[quick_index] Indexing block range from {} to {} complete.",
+                    starting_block, ending_block
+                );
                 break;
             }
 
-            let mut db_tx = self.db.pool.begin().await?;
-
-            insert_block_header_query(&mut db_tx, block_headers).await?;
-            update_latest_quick_index_block_number_query(&mut db_tx, ending_block).await?;
-
-            // Commit at the end
-            db_tx.commit().await?;
+            // If there's an error during rpc, retry.
+            error!("[quick_index] Rerun from block: {}", starting_block);
 
             // Exponential backoff
             let backoff = (i as u64).pow(2) * 5;
