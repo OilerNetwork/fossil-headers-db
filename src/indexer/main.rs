@@ -19,7 +19,7 @@ use fossil_headers_db::{
     router, rpc,
 };
 use tracing::{error, info};
-use tracing_subscriber::{fmt, EnvFilter};
+use tracing_subscriber::fmt;
 
 pub async fn get_base_index_metadata(db: Arc<DbConnection>) -> Result<IndexMetadata> {
     if let Some(metadata) = get_index_metadata(db.clone()).await? {
