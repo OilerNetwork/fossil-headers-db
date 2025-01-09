@@ -10,7 +10,7 @@ use eyre::{anyhow, Context, Result};
 use fossil_headers_db::{
     db::DbConnection,
     indexer::{
-        batch_service::{self, BatchIndexConfig, BatchIndexer},
+        batch_service::{BatchIndexConfig, BatchIndexer},
         quick_service::{QuickIndexConfig, QuickIndexer},
     },
     repositories::index_metadata::{
@@ -56,7 +56,7 @@ pub async fn main() -> Result<()> {
     setup_ctrlc_handler(Arc::clone(&should_terminate))?;
 
     // Start by checking and updating the current status in the db.
-    let indexing_metadata = get_base_index_metadata(db.clone()).await?;
+    // let indexing_metadata = get_base_index_metadata(db.clone()).await?;
     let router_terminator = Arc::clone(&should_terminate);
 
     // Setup the router which allows us to query health status and operations
