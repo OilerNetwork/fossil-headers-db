@@ -14,6 +14,7 @@ pub struct IndexMetadata {
     pub indexing_starting_block_number: i64,
     pub is_backfilling: bool,
     pub updated_at: chrono::DateTime<chrono::Utc>,
+    pub backfilling_block_number: Option<i64>,
 }
 
 // TODO: allow dead code for now. Adding tests in future PRs should allow us to remove this.
@@ -22,7 +23,13 @@ pub async fn get_index_metadata(db: Arc<DbConnection>) -> Result<Option<IndexMet
     let db = db.as_ref();
     let result: Result<IndexMetadata, sqlx::Error>  = sqlx::query_as(
             r#"
-            SELECT id, current_latest_block_number, indexing_starting_block_number, is_backfilling, updated_at
+            SELECT 
+                id,
+                current_latest_block_number,
+                indexing_starting_block_number,
+                is_backfilling,
+                updated_at,
+                backfilling_block_number
             FROM index_metadata
             "#,
         )
@@ -159,6 +166,25 @@ pub async fn update_latest_quick_index_block_number_query(
 
     Ok(())
 }
+
+pub async fn update_backfilling_block_number_query(
+    db_tx: &mut sqlx::Transaction<'_, Postgres>,
+    block_number: i64,
+) -> Result<()> {
+    sqlx::query(
+        r#"
+            UPDATE index_metadata
+            SET backfilling_block_number = $1,
+            updated_at = CURRENT_TIMESTAMP
+            "#,
+    )
+    .bind(block_number)
+    .execute(&mut **db_tx)
+    .await?;
+
+    Ok(())
+}
+
 #[cfg(test)]
 mod tests {
     // TODO: add tests here with db

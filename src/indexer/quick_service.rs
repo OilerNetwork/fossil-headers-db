@@ -22,7 +22,6 @@ use crate::{
 
 #[derive(Debug)]
 pub struct QuickIndexConfig {
-    pub starting_block: i64,
     pub max_retries: u8,
     pub poll_interval: u32,
     pub rpc_timeout: u32,
@@ -32,7 +31,6 @@ pub struct QuickIndexConfig {
 impl Default for QuickIndexConfig {
     fn default() -> Self {
         Self {
-            starting_block: 0,
             max_retries: 10,
             poll_interval: 10,
             rpc_timeout: 300,
@@ -94,7 +92,7 @@ impl QuickIndexer {
                     };
 
                 self.index_block_range(
-                    last_block_number,
+                    last_block_number + 1, // index from recorded last block + 1
                     ending_block_number,
                     &self.should_terminate,
                 )
