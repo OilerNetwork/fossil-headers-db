@@ -10,7 +10,7 @@ use eyre::{anyhow, Context, Result};
 use fossil_headers_db::{
     db::DbConnection,
     indexer::{
-        batch_service::{self, BatchIndexConfig},
+        batch_service::{BatchIndexConfig, BatchIndexer},
         quick_service::{QuickIndexConfig, QuickIndexer},
     },
     repositories::index_metadata::{
@@ -56,7 +56,7 @@ pub async fn main() -> Result<()> {
     setup_ctrlc_handler(Arc::clone(&should_terminate))?;
 
     // Start by checking and updating the current status in the db.
-    let indexing_metadata = get_base_index_metadata(db.clone()).await?;
+    // let indexing_metadata = get_base_index_metadata(db.clone()).await?;
     let router_terminator = Arc::clone(&should_terminate);
 
     // Setup the router which allows us to query health status and operations
@@ -92,10 +92,9 @@ pub async fn main() -> Result<()> {
         })?;
 
     // Start the batch indexer
-    let batch_index_config = BatchIndexConfig {
-        starting_block: indexing_metadata.indexing_starting_block_number,
-    };
-    let batch_index_terminator = Arc::clone(&should_terminate);
+    let batch_index_config = BatchIndexConfig::default();
+    let batch_indexer =
+        BatchIndexer::new(batch_index_config, db.clone(), should_terminate.clone()).await;
 
     let batch_indexer_handle = thread::Builder::new()
         .name("[batch_index]".to_owned())
@@ -103,10 +102,7 @@ pub async fn main() -> Result<()> {
             let rt = tokio::runtime::Runtime::new()?;
 
             info!("Starting batch indexer");
-            if let Err(e) = rt.block_on(batch_service::batch_index(
-                batch_index_config,
-                batch_index_terminator,
-            )) {
+            if let Err(e) = rt.block_on(batch_indexer.index()) {
                 error!("[batch_index] unexpected error {}", e);
             }
             Ok(())
