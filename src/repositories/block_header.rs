@@ -3,46 +3,45 @@ use sqlx::{query_builder::Separated, Postgres, QueryBuilder};
 
 use crate::{
     rpc::{BlockHeaderWithFullTransaction, Transaction},
-    utils::convert_hex_string_to_i64,
+    utils::{convert_hex_string_to_i32, convert_hex_string_to_i64},
 };
 
-// TODO: allow dead code for now. Adding tests in future PRs should allow us to remove this.
 #[allow(dead_code)]
-#[derive(Debug)]
-pub struct TransactionFormatted {
-    pub hash: String,
+#[derive(Debug, Clone, sqlx::FromRow)]
+pub struct TransactionDto {
+    pub transaction_hash: String,
     pub block_number: i64,
-    pub transaction_index: i64,
+    pub transaction_index: i32,
     pub value: String,
     pub gas_price: String,
     pub gas: String,
-    pub from: Option<String>,
-    pub to: Option<String>,
+    pub from_addr: Option<String>,
+    pub to_addr: Option<String>,
     pub max_priority_fee_per_gas: String,
     pub max_fee_per_gas: String,
     pub chain_id: Option<String>,
 }
 
-// TODO: allow dead code for now. Adding tests in future PRs should allow us to remove this.
 #[allow(dead_code)]
-#[derive(Debug)]
-pub struct BlockHeaderFormatted {
+#[derive(Debug, Clone, sqlx::FromRow)]
+pub struct BlockHeaderDto {
     pub gas_limit: i64,
     pub gas_used: i64,
     pub base_fee_per_gas: Option<String>,
-    pub hash: String,
+    pub block_hash: String,
     pub nonce: Option<String>,
     pub number: i64,
     pub receipts_root: String,
     pub state_root: String,
-    pub transactions_root: String,
+    pub transaction_root: String,
     pub parent_hash: Option<String>,
     pub miner: Option<String>,
     pub logs_bloom: Option<String>,
     pub difficulty: Option<String>,
+    #[sqlx(rename = "totaldifficulty")]
     pub total_difficulty: Option<String>,
     pub sha3_uncles: Option<String>,
-    pub timestamp: i64,
+    pub timestamp: String,
     pub extra_data: Option<String>,
     pub mix_hash: Option<String>,
     pub withdrawals_root: Option<String>,
@@ -51,62 +50,94 @@ pub struct BlockHeaderFormatted {
     pub parent_beacon_block_root: Option<String>,
 }
 
-// TODO: allow dead code for now. Adding tests in future PRs should allow us to remove this.
+#[allow(dead_code)]
+fn convert_rpc_blockheader_to_dto(
+    block_header: BlockHeaderWithFullTransaction,
+) -> Result<BlockHeaderDto> {
+    // These fields should be converted successfully, and if its not converted successfully,
+    // it should be considered an unintended bug.
+    let block_number = convert_hex_string_to_i64(&block_header.number)?;
+    let gas_limit = convert_hex_string_to_i64(&block_header.gas_limit)?;
+    let gas_used = convert_hex_string_to_i64(&block_header.gas_used)?;
+    let block_timestamp = convert_hex_string_to_i64(&block_header.timestamp)?;
+    let receipts_root = block_header
+        .receipts_root
+        .clone()
+        .context("receipt root should not be empty")?;
+    let state_root = block_header
+        .state_root
+        .clone()
+        .context("state root should not be empty")?;
+    let transaction_root = block_header
+        .transactions_root
+        .clone()
+        .context("transactions root should not be empty")?;
+
+    Ok(BlockHeaderDto {
+        block_hash: block_header.hash.clone(),
+        number: block_number,
+        gas_limit,
+        gas_used,
+        base_fee_per_gas: block_header.base_fee_per_gas.clone(),
+        nonce: block_header.nonce.clone(),
+
+        parent_hash: block_header.parent_hash.clone(),
+        miner: block_header.miner.clone(),
+        logs_bloom: block_header.logs_bloom.clone(),
+        difficulty: block_header.difficulty.clone(),
+        total_difficulty: block_header.total_difficulty.clone(),
+        sha3_uncles: block_header.sha3_uncles.clone(),
+        timestamp: block_timestamp.to_string(),
+        extra_data: block_header.extra_data.clone(),
+        mix_hash: block_header.mix_hash.clone(),
+        withdrawals_root: block_header.withdrawals_root.clone(),
+        blob_gas_used: block_header.blob_gas_used.clone(),
+        excess_blob_gas: block_header.excess_blob_gas.clone(),
+        parent_beacon_block_root: block_header.parent_beacon_block_root.clone(),
+        receipts_root,
+        state_root,
+        transaction_root,
+    })
+}
+
+#[allow(dead_code)]
+fn convert_rpc_transaction_to_dto(transaction: Transaction) -> Result<TransactionDto> {
+    let block_number = convert_hex_string_to_i64(&transaction.block_number)?;
+    let transaction_index = convert_hex_string_to_i32(&transaction.transaction_index)?;
+
+    Ok(TransactionDto {
+        transaction_hash: transaction.hash.clone(),
+        block_number,
+        transaction_index,
+        from_addr: transaction.from.clone(),
+        to_addr: transaction.to.clone(),
+        value: transaction.value.clone(),
+        gas_price: transaction.gas_price.clone().unwrap_or("0".to_string()),
+        max_priority_fee_per_gas: transaction
+            .max_priority_fee_per_gas
+            .clone()
+            .unwrap_or("0".to_string()),
+        max_fee_per_gas: transaction
+            .max_fee_per_gas
+            .clone()
+            .unwrap_or("0".to_string()),
+        gas: transaction.gas.clone(),
+        chain_id: transaction.chain_id.clone(),
+    })
+}
+
 #[allow(dead_code)]
 // Seems that using transaction with multi row inserts seem to be the fastest
 pub async fn insert_block_header_query(
     db_tx: &mut sqlx::Transaction<'_, Postgres>,
     block_headers: Vec<BlockHeaderWithFullTransaction>,
 ) -> Result<()> {
-    let mut formatted_block_headers: Vec<BlockHeaderFormatted> =
-        Vec::with_capacity(block_headers.len());
+    let mut formatted_block_headers: Vec<BlockHeaderDto> = Vec::with_capacity(block_headers.len());
     let mut flattened_transactions = Vec::new();
 
     for header in block_headers.iter() {
-        // These fields should be converted successfully, and if its not converted successfully,
-        // it should be considered an unintended bug,
-        let block_number = convert_hex_string_to_i64(&header.number)?;
-        let gas_limit = convert_hex_string_to_i64(&header.gas_limit)?;
-        let gas_used = convert_hex_string_to_i64(&header.gas_used)?;
-        let block_timestamp = convert_hex_string_to_i64(&header.timestamp)?;
-        let receipts_root = header
-            .receipts_root
-            .clone()
-            .context("receipt root should not be empty")?;
-        let state_root = header
-            .state_root
-            .clone()
-            .context("state root should not be empty")?;
-        let transactions_root = header
-            .transactions_root
-            .clone()
-            .context("transactions root should not be empty")?;
-
-        formatted_block_headers.push(BlockHeaderFormatted {
-            hash: header.hash.clone(),
-            number: block_number,
-            gas_limit,
-            gas_used,
-            base_fee_per_gas: header.base_fee_per_gas.clone(),
-            nonce: header.nonce.clone(),
-
-            parent_hash: header.parent_hash.clone(),
-            miner: header.miner.clone(),
-            logs_bloom: header.logs_bloom.clone(),
-            difficulty: header.difficulty.clone(),
-            total_difficulty: header.total_difficulty.clone(),
-            sha3_uncles: header.sha3_uncles.clone(),
-            timestamp: block_timestamp,
-            extra_data: header.extra_data.clone(),
-            mix_hash: header.mix_hash.clone(),
-            withdrawals_root: header.withdrawals_root.clone(),
-            blob_gas_used: header.blob_gas_used.clone(),
-            excess_blob_gas: header.excess_blob_gas.clone(),
-            parent_beacon_block_root: header.parent_beacon_block_root.clone(),
-            receipts_root,
-            state_root,
-            transactions_root,
-        });
+        let dto = convert_rpc_blockheader_to_dto(header.clone())?;
+        formatted_block_headers.push(dto);
 
         // Collect the transactions here and get the queries.
         flattened_transactions.extend(header.transactions.clone());
@@ -126,13 +157,13 @@ pub async fn insert_block_header_query(
         formatted_block_headers.iter(),
         |mut b: Separated<'_, '_, Postgres, &'static str>, block_header| {
             // Convert values and unwrap_or_default() to handle errors
-            b.push_bind(&block_header.hash)
+            b.push_bind(&block_header.block_hash)
                 .push_bind(block_header.number)
                 .push_bind(block_header.gas_limit)
                 .push_bind(block_header.gas_used)
                 .push_bind(&block_header.base_fee_per_gas)
                 .push_bind(&block_header.nonce)
-                .push_bind(&block_header.transactions_root)
+                .push_bind(&block_header.transaction_root)
                 .push_bind(&block_header.receipts_root)
                 .push_bind(&block_header.state_root)
                 .push_bind(&block_header.parent_hash)
@@ -141,7 +172,7 @@ pub async fn insert_block_header_query(
                 .push_bind(&block_header.difficulty)
                 .push_bind(&block_header.total_difficulty)
                 .push_bind(&block_header.sha3_uncles)
-                .push_bind(block_header.timestamp)
+                .push_bind(block_header.timestamp.to_string())
                 .push_bind(&block_header.extra_data)
                 .push_bind(&block_header.mix_hash)
                 .push_bind(&block_header.withdrawals_root)
@@ -180,14 +211,14 @@ pub async fn insert_block_header_query(
 
     query_builder.build().execute(&mut **db_tx).await?;
 
-    insert_block_txs_query(db_tx, flattened_transactions).await?;
+    if !flattened_transactions.is_empty() {
+        insert_block_txs_query(db_tx, flattened_transactions).await?;
+    }
 
     Ok(())
 }
 
-// TODO: allow dead code for now. Adding tests in future PRs should allow us to remove this.
-#[allow(dead_code)]
-pub async fn insert_block_txs_query(
+async fn insert_block_txs_query(
     db_tx: &mut sqlx::Transaction<'_, Postgres>,
     transactions: Vec<Transaction>,
 ) -> Result<()> {
@@ -196,49 +227,25 @@ pub async fn insert_block_txs_query(
                 block_number, transaction_hash, transaction_index,
                 from_addr, to_addr, value, gas_price,
                 max_priority_fee_per_gas, max_fee_per_gas, gas, chain_id
-            ) ",
+            )",
     );
 
     // Pre-format and handle the potential error arising from the hex -> i64 conversion
-
-    let mut formatted_transactions: Vec<TransactionFormatted> =
-        Vec::with_capacity(transactions.len());
+    let mut formatted_transactions: Vec<TransactionDto> = Vec::with_capacity(transactions.len());
     for transaction in transactions.iter() {
-        let tx_block_number = convert_hex_string_to_i64(&transaction.block_number)?;
-        let tx_index = convert_hex_string_to_i64(&transaction.transaction_index)?;
-
-        formatted_transactions.push(TransactionFormatted {
-            block_number: tx_block_number,
-            hash: transaction.hash.clone(),
-            transaction_index: tx_index,
-            from: transaction.from.clone(),
-            to: transaction.to.clone(),
-            value: transaction.value.clone(),
-            // TODO: is this a good idea? To default to 0? Does this interfere with any calculations?
-            gas_price: transaction.gas_price.clone().unwrap_or("0".to_string()),
-            max_priority_fee_per_gas: transaction
-                .max_priority_fee_per_gas
-                .clone()
-                .unwrap_or("0".to_string()),
-            max_fee_per_gas: transaction
-                .max_fee_per_gas
-                .clone()
-                .unwrap_or("0".to_string()),
-            gas: transaction.gas.clone(),
-            chain_id: transaction.chain_id.clone(),
-        });
+        let dto = convert_rpc_transaction_to_dto(transaction.clone())?;
+        formatted_transactions.push(dto);
     }
 
     // Push the formatted values into the query.
     query_builder.push_values(
         formatted_transactions.iter(),
         |mut b: Separated<'_, '_, Postgres, &'static str>, tx| {
-            // Convert values and unwrap_or_default() to handle errors
             b.push_bind(tx.block_number)
-                .push_bind(&tx.hash)
+                .push_bind(&tx.transaction_hash)
                 .push_bind(tx.transaction_index)
-                .push_bind(&tx.from)
-                .push_bind(&tx.to)
+                .push_bind(&tx.from_addr)
+                .push_bind(&tx.to_addr)
                 .push_bind(&tx.value)
                 .push_bind(&tx.gas_price)
                 .push_bind(&tx.max_priority_fee_per_gas)
@@ -267,7 +274,355 @@ pub async fn insert_block_txs_query(
     Ok(())
 }
 
+#[serial_test::serial]
 #[cfg(test)]
 mod tests {
-    // TODO: add tests here with db
+    use std::{env, vec};
+
+    use tokio::fs;
+
+    use crate::{db::DbConnection, rpc::RpcResponse};
+
+    use super::*;
+
+    fn get_test_db_connection() -> String {
+        env::var("TEST_DB_CONNECTION_STRING").unwrap()
+    }
+
+    fn assert_block_header_eq(header1: BlockHeaderDto, header2: BlockHeaderDto) {
+        assert_eq!(header1.number, header2.number);
+        assert_eq!(header1.block_hash, header2.block_hash);
+        assert_eq!(header1.nonce, header2.nonce);
+        assert_eq!(header1.parent_hash, header2.parent_hash);
+        assert_eq!(header1.gas_limit, header2.gas_limit);
+        assert_eq!(header1.gas_used, header2.gas_used);
+        assert_eq!(header1.base_fee_per_gas, header2.base_fee_per_gas);
+        assert_eq!(header1.receipts_root, header2.receipts_root);
+        assert_eq!(header1.state_root, header2.state_root);
+        assert_eq!(header1.transaction_root, header2.transaction_root);
+        assert_eq!(header1.miner, header2.miner);
+        assert_eq!(header1.logs_bloom, header2.logs_bloom);
+        assert_eq!(header1.difficulty, header2.difficulty);
+        assert_eq!(header1.total_difficulty, header2.total_difficulty);
+        assert_eq!(header1.sha3_uncles, header2.sha3_uncles);
+        assert_eq!(header1.timestamp, header2.timestamp);
+        assert_eq!(header1.extra_data, header2.extra_data);
+        assert_eq!(header1.mix_hash, header2.mix_hash);
+        assert_eq!(header1.withdrawals_root, header2.withdrawals_root);
+        assert_eq!(header1.blob_gas_used, header2.blob_gas_used);
+        assert_eq!(header1.excess_blob_gas, header2.excess_blob_gas);
+        assert_eq!(
+            header1.parent_beacon_block_root,
+            header2.parent_beacon_block_root
+        );
+    }
+
+    fn assert_transactions_eq(transaction1: TransactionDto, transaction2: TransactionDto) {
+        assert_eq!(transaction1.block_number, transaction2.block_number);
+        assert_eq!(transaction1.transaction_hash, transaction2.transaction_hash);
+        assert_eq!(
+            transaction1.transaction_index,
+            transaction2.transaction_index
+        );
+        assert_eq!(transaction1.from_addr, transaction2.from_addr);
+        assert_eq!(transaction1.to_addr, transaction2.to_addr);
+        assert_eq!(transaction1.value, transaction2.value);
+        assert_eq!(transaction1.gas_price, transaction2.gas_price);
+        assert_eq!(
+            transaction1.max_priority_fee_per_gas,
+            transaction2.max_priority_fee_per_gas
+        );
+        assert_eq!(transaction1.max_fee_per_gas, transaction2.max_fee_per_gas);
+        assert_eq!(transaction1.gas, transaction2.gas);
+        assert_eq!(transaction1.chain_id, transaction2.chain_id);
+    }
+
+    async fn get_fixtures_for_tests() -> Vec<BlockHeaderWithFullTransaction> {
+        let block_21598014 =
+            fs::read_to_string("src/repositories/fixtures/eth_getBlockByNumber_21598014.json")
+                .await
+                .unwrap();
+        let block_21598015 =
+            fs::read_to_string("src/repositories/fixtures/eth_getBlockByNumber_21598015.json")
+                .await
+                .unwrap();
+
+        let block_21598014_response =
+            serde_json::from_str::<RpcResponse<BlockHeaderWithFullTransaction>>(&block_21598014)
+                .unwrap();
+        let block_21598015_response =
+            serde_json::from_str::<RpcResponse<BlockHeaderWithFullTransaction>>(&block_21598015)
+                .unwrap();
+
+        vec![
+            block_21598014_response.result,
+            block_21598015_response.result,
+        ]
+    }
+
+    #[tokio::test]
+    async fn test_insert_block_header_success() {
+        let url = get_test_db_connection();
+        let db = DbConnection::new(url).await.unwrap();
+
+        let block_headers = get_fixtures_for_tests().await;
+
+        // Insert the block header
+        let mut tx = db.pool.begin().await.unwrap();
+        insert_block_header_query(&mut tx, vec![block_headers[0].clone()])
+            .await
+            .unwrap();
+
+        // Check if the block header was inserted
+        let result: Result<BlockHeaderDto, sqlx::Error> =
+            sqlx::query_as("SELECT * FROM blockheaders WHERE number = $1")
+                .bind(convert_hex_string_to_i64(&block_headers[0].number).unwrap())
+                .fetch_one(&mut *tx)
+                .await;
+        assert!(result.is_ok());
+
+        let block_header_to_compare =
+            convert_rpc_blockheader_to_dto(block_headers[0].clone()).unwrap();
+        let block_header_in_db = result.unwrap();
+
+        assert_block_header_eq(block_header_in_db, block_header_to_compare);
+
+        tx.rollback().await.unwrap();
+    }
+
+    #[tokio::test]
+    async fn test_insert_multiple_block_header_success() {
+        let url = get_test_db_connection();
+        let db = DbConnection::new(url).await.unwrap();
+
+        let block_headers = get_fixtures_for_tests().await;
+
+        // Insert the block header
+        let mut tx = db.pool.begin().await.unwrap();
+        insert_block_header_query(&mut tx, block_headers.clone())
+            .await
+            .unwrap();
+
+        // Check if the first block is inserted
+        let result: Result<BlockHeaderDto, sqlx::Error> =
+            sqlx::query_as("SELECT * FROM blockheaders WHERE number = $1")
+                .bind(convert_hex_string_to_i64(&block_headers[0].number).unwrap())
+                .fetch_one(&mut *tx)
+                .await;
+        assert!(result.is_ok());
+
+        let block_header_to_compare =
+            convert_rpc_blockheader_to_dto(block_headers[0].clone()).unwrap();
+        let block_header_in_db = result.unwrap();
+        assert_block_header_eq(block_header_in_db, block_header_to_compare);
+
+        // Check if the second block is inserted
+        let result: Result<BlockHeaderDto, sqlx::Error> =
+            sqlx::query_as("SELECT * FROM blockheaders WHERE number = $1")
+                .bind(convert_hex_string_to_i64(&block_headers[1].number).unwrap())
+                .fetch_one(&mut *tx)
+                .await;
+        assert!(result.is_ok());
+
+        let block_header_to_compare =
+            convert_rpc_blockheader_to_dto(block_headers[1].clone()).unwrap();
+        let block_header_in_db = result.unwrap();
+        assert_block_header_eq(block_header_in_db, block_header_to_compare);
+
+        tx.rollback().await.unwrap();
+    }
+
+    #[tokio::test]
+    async fn test_insert_block_header_failed_hex_conversion() {
+        let url = get_test_db_connection();
+        let db = DbConnection::new(url).await.unwrap();
+
+        let block_headers = get_fixtures_for_tests().await;
+
+        // Insert the block header
+        let mut tx = db.pool.begin().await.unwrap();
+        let block_header = block_headers[0].clone();
+        let block_header = BlockHeaderWithFullTransaction {
+            number: "0xg".to_string(),
+            ..block_header
+        };
+
+        let result = insert_block_header_query(&mut tx, vec![block_header]).await;
+        assert!(result.is_err());
+
+        tx.rollback().await.unwrap();
+    }
+
+    #[tokio::test]
+    async fn test_insert_block_header_with_number_conflict() {
+        let url = get_test_db_connection();
+        let db = DbConnection::new(url).await.unwrap();
+
+        let block_headers = get_fixtures_for_tests().await;
+
+        // Insert the block header
+        let mut tx = db.pool.begin().await.unwrap();
+        insert_block_header_query(&mut tx, vec![block_headers[0].clone()])
+            .await
+            .unwrap();
+
+        // Insert the block header again
+        let same_block_header_with_diff_values = block_headers[0].clone();
+        let same_block_header_with_diff_values = BlockHeaderWithFullTransaction {
+            gas_limit: "0x1".to_string(),
+            ..same_block_header_with_diff_values
+        };
+        let result =
+            insert_block_header_query(&mut tx, vec![same_block_header_with_diff_values.clone()])
+                .await;
+        assert!(result.is_ok());
+
+        // See if its properly updated
+        let result: Result<BlockHeaderDto, sqlx::Error> =
+            sqlx::query_as("SELECT * FROM blockheaders WHERE number = $1")
+                .bind(convert_hex_string_to_i64(&block_headers[0].number).unwrap())
+                .fetch_one(&mut *tx)
+                .await;
+        assert!(result.is_ok());
+        let block_header_to_compare =
+            convert_rpc_blockheader_to_dto(same_block_header_with_diff_values.clone()).unwrap();
+        let block_header_in_db = result.unwrap();
+        assert_block_header_eq(block_header_in_db, block_header_to_compare);
+
+        tx.rollback().await.unwrap();
+    }
+
+    #[tokio::test]
+    async fn test_insert_block_txs_success() {
+        let url = get_test_db_connection();
+        let db = DbConnection::new(url).await.unwrap();
+
+        let block_headers = get_fixtures_for_tests().await;
+
+        let mut tx = db.pool.begin().await.unwrap();
+
+        // Insert the transactions
+        let transaction = block_headers[0].transactions[0].clone();
+        insert_block_txs_query(&mut tx, vec![transaction.clone()])
+            .await
+            .unwrap();
+
+        // Check if the transactions are inserted
+        let result: Result<TransactionDto, sqlx::Error> =
+            sqlx::query_as("SELECT * FROM transactions WHERE transaction_hash = $1")
+                .bind(&transaction.hash)
+                .fetch_one(&mut *tx)
+                .await;
+        assert!(result.is_ok());
+
+        let transaction_to_compare = convert_rpc_transaction_to_dto(transaction.clone()).unwrap();
+        let transaction_in_db = result.unwrap();
+        assert_transactions_eq(transaction_in_db, transaction_to_compare);
+
+        tx.rollback().await.unwrap();
+    }
+
+    #[tokio::test]
+    async fn test_insert_multiple_block_txs_success() {
+        let url = get_test_db_connection();
+        let db = DbConnection::new(url).await.unwrap();
+
+        let block_headers = get_fixtures_for_tests().await;
+
+        let mut tx = db.pool.begin().await.unwrap();
+
+        // Insert the transactions
+        let transaction_1 = block_headers[0].transactions[0].clone();
+        let transaction_2 = block_headers[0].transactions[1].clone();
+
+        insert_block_txs_query(&mut tx, vec![transaction_1.clone(), transaction_2.clone()])
+            .await
+            .unwrap();
+
+        // Check if the transactions are inserted
+        let result: Result<TransactionDto, sqlx::Error> =
+            sqlx::query_as("SELECT * FROM transactions WHERE transaction_hash = $1")
+                .bind(&transaction_1.hash)
+                .fetch_one(&mut *tx)
+                .await;
+        assert!(result.is_ok());
+
+        let transaction_to_compare = convert_rpc_transaction_to_dto(transaction_1.clone()).unwrap();
+        let transaction_in_db = result.unwrap();
+        assert_transactions_eq(transaction_in_db, transaction_to_compare);
+
+        let result: Result<TransactionDto, sqlx::Error> =
+            sqlx::query_as("SELECT * FROM transactions WHERE transaction_hash = $1")
+                .bind(&transaction_2.hash)
+                .fetch_one(&mut *tx)
+                .await;
+        assert!(result.is_ok());
+
+        let transaction_to_compare = convert_rpc_transaction_to_dto(transaction_2.clone()).unwrap();
+        let transaction_in_db = result.unwrap();
+        assert_transactions_eq(transaction_in_db, transaction_to_compare);
+
+        tx.rollback().await.unwrap();
+    }
+
+    #[tokio::test]
+    async fn test_insert_block_txs_failed_hex_conversion() {
+        let url = get_test_db_connection();
+        let db = DbConnection::new(url).await.unwrap();
+
+        let block_headers = get_fixtures_for_tests().await;
+
+        let mut tx = db.pool.begin().await.unwrap();
+
+        // Insert the transactions
+        let transaction = block_headers[0].transactions[0].clone();
+        let transaction = Transaction {
+            block_number: "0xg".to_string(),
+            ..transaction
+        };
+        let result = insert_block_txs_query(&mut tx, vec![transaction]).await;
+        assert!(result.is_err());
+
+        tx.rollback().await.unwrap();
+    }
+
+    #[tokio::test]
+    async fn test_insert_block_txs_with_hash_conflict() {
+        let url = get_test_db_connection();
+        let db = DbConnection::new(url).await.unwrap();
+
+        let block_headers = get_fixtures_for_tests().await;
+
+        let mut tx = db.pool.begin().await.unwrap();
+
+        // Insert the transactions
+        let transaction = block_headers[0].transactions[0].clone();
+        insert_block_txs_query(&mut tx, vec![transaction.clone()])
+            .await
+            .unwrap();
+
+        // Insert the transactions again
+        let same_transaction_with_diff_values = block_headers[0].transactions[0].clone();
+        let same_transaction_with_diff_values = Transaction {
+            value: "0x1".to_string(),
+            ..same_transaction_with_diff_values
+        };
+        let result =
+            insert_block_txs_query(&mut tx, vec![same_transaction_with_diff_values.clone()]).await;
+        assert!(result.is_ok());
+
+        // See if its properly updated
+        let result: Result<TransactionDto, sqlx::Error> =
+            sqlx::query_as("SELECT * FROM transactions WHERE transaction_hash = $1")
+                .bind(&transaction.hash)
+                .fetch_one(&mut *tx)
+                .await;
+        assert!(result.is_ok());
+        let transaction_to_compare =
+            convert_rpc_transaction_to_dto(same_transaction_with_diff_values.clone()).unwrap();
+        let transaction_in_db = result.unwrap();
+        assert_transactions_eq(transaction_in_db, transaction_to_compare);
+
+        tx.rollback().await.unwrap();
+    }
 }

@@ -26,8 +26,9 @@ rustflags = [
     "clippy::match_bool",
     "-D",
     "clippy::needless_bool",
-    "-W",
-    "clippy::unwrap_used",
+    # Disabling this as unwrap is useful in tests.
+    # "-W",
+    # "clippy::unwrap_used",
     "-W",
     "clippy::expect_used",
 ]

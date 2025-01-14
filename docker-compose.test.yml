@@ -1,7 +1,7 @@
 version: '3.8'
 services:
   test_db:
-    image: postgres:15
+    image: postgres:16-alpine
     environment:
       POSTGRES_USER: postgres
       POSTGRES_PASSWORD: postgres
@@ -10,6 +10,11 @@ services:
       - "5433:5432"  # Note: Using 5433 to avoid conflicts with any existing db
     volumes:
       - postgres_test_data:/var/lib/postgresql/data
-
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U postgres"]
+      interval: 5s
+      timeout: 5s
+      retries: 5
+      
 volumes:
   postgres_test_data:

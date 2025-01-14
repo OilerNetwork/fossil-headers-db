@@ -8,7 +8,7 @@ use crate::db::DbConnection;
 
 #[derive(Debug, Deserialize, sqlx::FromRow)]
 #[allow(dead_code)]
-pub struct IndexMetadata {
+pub struct IndexMetadataDto {
     pub id: i64,
     pub current_latest_block_number: i64,
     pub indexing_starting_block_number: i64,
@@ -19,9 +19,9 @@ pub struct IndexMetadata {
 
 // TODO: allow dead code for now. Adding tests in future PRs should allow us to remove this.
 #[allow(dead_code)]
-pub async fn get_index_metadata(db: Arc<DbConnection>) -> Result<Option<IndexMetadata>> {
+pub async fn get_index_metadata(db: Arc<DbConnection>) -> Result<Option<IndexMetadataDto>> {
     let db = db.as_ref();
-    let result: Result<IndexMetadata, sqlx::Error> = sqlx::query_as(
+    let result: Result<IndexMetadataDto, sqlx::Error> = sqlx::query_as(
         r#"
             SELECT 
                 id,
@@ -36,7 +36,7 @@ pub async fn get_index_metadata(db: Arc<DbConnection>) -> Result<Option<IndexMet
     .fetch_one(&db.pool)
     .await;
 
-    let result: Option<IndexMetadata> = match result {
+    let result: Option<IndexMetadataDto> = match result {
         Ok(result) => Some(result),
         Err(err) => match err {
             sqlx::Error::RowNotFound => None,
@@ -147,7 +147,6 @@ pub async fn set_initial_indexing_status(
     Ok(())
 }
 
-// TODO: allow dead code for now. Adding tests in future PRs should allow us to remove this.
 #[allow(dead_code)]
 pub async fn update_latest_quick_index_block_number_query(
     db_tx: &mut sqlx::Transaction<'_, Postgres>,
@@ -167,7 +166,6 @@ pub async fn update_latest_quick_index_block_number_query(
     Ok(())
 }
 
-// TODO: allow dead code for now. Adding tests in future PRs should allow us to remove this.
 #[allow(dead_code)]
 pub async fn update_backfilling_block_number_query(
     db_tx: &mut sqlx::Transaction<'_, Postgres>,
@@ -187,7 +185,105 @@ pub async fn update_backfilling_block_number_query(
     Ok(())
 }
 
+#[serial_test::serial]
 #[cfg(test)]
 mod tests {
-    // TODO: add tests here with db
+    use std::env;
+
+    use super::*;
+
+    // TODO: do transactions for all the other functions as well
+    // Ideally, we should allow tx or db, however the executor trait is tricky to utilize
+
+    fn get_test_db_connection() -> String {
+        env::var("TEST_DB_CONNECTION_STRING").unwrap()
+    }
+
+    #[tokio::test]
+    async fn test_update_latest_quick_index_block_number_query() {
+        let url = get_test_db_connection();
+        let db = DbConnection::new(url).await.unwrap();
+        let mut tx = db.pool.begin().await.unwrap();
+
+        sqlx::query(
+            "INSERT INTO index_metadata (
+                current_latest_block_number,
+                indexing_starting_block_number,
+                is_backfilling
+            ) VALUES (
+                123123,
+                0,
+                false
+            )",
+        )
+        .execute(&mut *tx)
+        .await
+        .unwrap();
+
+        let result: Result<IndexMetadataDto, sqlx::Error> =
+            sqlx::query_as("SELECT * FROM index_metadata")
+                .fetch_one(&mut *tx)
+                .await;
+
+        assert!(result.is_ok());
+        assert_eq!(result.unwrap().current_latest_block_number, 123123);
+
+        update_latest_quick_index_block_number_query(&mut tx, 1)
+            .await
+            .unwrap();
+
+        let result: Result<IndexMetadataDto, sqlx::Error> =
+            sqlx::query_as("SELECT * FROM index_metadata")
+                .fetch_one(&mut *tx)
+                .await;
+
+        assert!(result.is_ok());
+        assert_eq!(result.unwrap().current_latest_block_number, 1);
+
+        tx.rollback().await.unwrap();
+    }
+
+    #[tokio::test]
+    async fn test_update_backfilling_block_number_query() {
+        let url = get_test_db_connection();
+        let db = DbConnection::new(url).await.unwrap();
+        let mut tx = db.pool.begin().await.unwrap();
+
+        sqlx::query(
+            "INSERT INTO index_metadata (
+                current_latest_block_number,
+                indexing_starting_block_number,
+                is_backfilling
+            ) VALUES (
+                123123,
+                0,
+                false
+            )",
+        )
+        .execute(&mut *tx)
+        .await
+        .unwrap();
+
+        let result: Result<IndexMetadataDto, sqlx::Error> =
+            sqlx::query_as("SELECT * FROM index_metadata")
+                .fetch_one(&mut *tx)
+                .await;
+
+        assert!(result.is_ok());
+        assert_eq!(result.unwrap().backfilling_block_number, None);
+
+        update_backfilling_block_number_query(&mut tx, 100000)
+            .await
+            .unwrap();
+
+        let result: Result<IndexMetadataDto, sqlx::Error> =
+            sqlx::query_as("SELECT * FROM index_metadata")
+                .fetch_one(&mut *tx)
+                .await;
+
+        assert!(result.is_ok());
+        assert_eq!(result.unwrap().backfilling_block_number.unwrap(), 100000);
+
+        tx.rollback().await.unwrap();
+    }
 }
