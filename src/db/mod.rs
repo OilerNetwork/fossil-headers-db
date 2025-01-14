@@ -304,6 +304,7 @@ where
     }
 }
 
+#[allow(clippy::all)]
 fn is_transient_error(e: &Error) -> bool {
     // Check for database connection errors
     if let Some(db_err) = e.downcast_ref::<sqlx::Error>() {
