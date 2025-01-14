@@ -1,4 +1,5 @@
 use std::{
+    env,
     sync::{
         atomic::{AtomicBool, Ordering},
         Arc,
@@ -14,14 +15,14 @@ use fossil_headers_db::{
         quick_service::{QuickIndexConfig, QuickIndexer},
     },
     repositories::index_metadata::{
-        get_index_metadata, set_initial_indexing_status, IndexMetadata,
+        get_index_metadata, set_initial_indexing_status, IndexMetadataDto,
     },
     router, rpc,
 };
 use tracing::{error, info};
 use tracing_subscriber::fmt;
 
-pub async fn get_base_index_metadata(db: Arc<DbConnection>) -> Result<IndexMetadata> {
+pub async fn get_base_index_metadata(db: Arc<DbConnection>) -> Result<IndexMetadataDto> {
     if let Some(metadata) = get_index_metadata(db.clone()).await? {
         return Ok(metadata);
     }
@@ -42,12 +43,15 @@ pub async fn main() -> Result<()> {
     // TODO: this should be set to only be turned on if we're in dev mode
     dotenvy::dotenv()?;
 
+    let db_conn_string =
+        env::var("DB_CONNECTION_STRING").context("DB_CONNECTION_STRING must be set")?;
+
     // Initialize tracing subscriber
     fmt().init();
 
     // Setup database connection
     info!("Connecting to DB");
-    let db = DbConnection::new(None).await?;
+    let db = DbConnection::new(db_conn_string).await?;
 
     info!("Starting Indexer");
 

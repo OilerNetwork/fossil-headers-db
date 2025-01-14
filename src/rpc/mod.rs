@@ -7,6 +7,8 @@ use std::time::Duration;
 use tokio::time::sleep;
 use tracing::{error, warn};
 
+// TODO: instead of keeping this static, make it passable as a dependency.
+// This should allow us to test this module.
 static CLIENT: Lazy<Client> = Lazy::new(Client::new);
 static NODE_CONNECTION_STRING: Lazy<Option<String>> = Lazy::new(|| {
     dotenvy::var("NODE_CONNECTION_STRING")
@@ -51,7 +53,7 @@ pub struct Transaction {
     pub chain_id: Option<String>,
 }
 
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Deserialize, Clone)]
 #[allow(dead_code)]
 pub struct BlockHeaderWithEmptyTransaction {
     #[serde(rename(deserialize = "gasLimit"))]
@@ -97,7 +99,7 @@ pub struct BlockHeaderWithEmptyTransaction {
     pub parent_beacon_block_root: Option<String>,
 }
 
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Deserialize, Clone)]
 pub struct BlockHeaderWithFullTransaction {
     #[serde(rename(deserialize = "gasLimit"))]
     pub gas_limit: String,

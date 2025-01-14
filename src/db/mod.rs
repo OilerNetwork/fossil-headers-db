@@ -13,8 +13,6 @@ use tokio::sync::OnceCell;
 use tokio::time::sleep;
 use tracing::{error, info, warn};
 
-mod db_test;
-
 static DB_POOL: OnceCell<Arc<Pool<Postgres>>> = OnceCell::const_new();
 pub const DB_MAX_CONNECTIONS: u32 = 50;
 
@@ -329,16 +327,11 @@ pub struct DbConnection {
     pub pool: Pool<Postgres>,
 }
 
+
 impl DbConnection {
-    // TODO: allow dead code for now. Adding tests in future PRs should allow us to remove this.
     #[allow(dead_code)]
-    pub async fn new(db_conn_string: Option<String>) -> Result<Arc<Self>> {
-        let mut conn_options: PgConnectOptions = match db_conn_string {
-            Some(conn_string) => conn_string.parse()?,
-            None => dotenvy::var("DB_CONNECTION_STRING")
-                .context("DB_CONNECTION_STRING must be set")?
-                .parse()?,
-        };
+    pub async fn new(db_conn_string: String) -> Result<Arc<Self>> {
+        let mut conn_options: PgConnectOptions = db_conn_string.parse()?;
 
         conn_options = conn_options
             .log_slow_statements(tracing::log::LevelFilter::Debug, Duration::new(120, 0));
@@ -353,4 +346,25 @@ impl DbConnection {
 }
 
 #[cfg(test)]
-mod tests {}
+mod tests {
+    use std::env;
+
+    use super::*;
+
+    fn get_test_db_connection() -> String {
+        env::var("TEST_DB_CONNECTION_STRING").unwrap()
+    }
+
+    #[tokio::test]
+    async fn test_should_successfully_initialize_db() {
+        let url = get_test_db_connection();
+        let db = DbConnection::new(url).await.unwrap();
+
+        assert!(db.pool.acquire().await.is_ok());
+    }
+
+    #[tokio::test]
+    async fn test_should_fail_if_incorrect_db_url_provided() {
+        assert!(DbConnection::new("test".to_string()).await.is_err());
+    }
+}
