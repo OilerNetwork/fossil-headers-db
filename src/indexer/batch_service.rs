@@ -122,7 +122,7 @@ impl BatchIndexer {
     }
 
     // Indexing a block range, inclusive.
-    pub async fn index_block_range(
+    async fn index_block_range(
         &self,
         starting_block: i64,
         ending_block: i64,
@@ -209,5 +209,31 @@ impl BatchIndexer {
         }
 
         Err(anyhow!("Max retries reached. Stopping batch indexing."))
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use std::env;
+
+    use super::*;
+
+    fn get_test_db_connection() -> String {
+        env::var("TEST_DB_CONNECTION_STRING").unwrap()
+    }
+
+    #[tokio::test]
+    async fn test_batch_indexer_new() {
+        let config = BatchIndexConfig::default();
+        let url = get_test_db_connection();
+        let db = DbConnection::new(url).await.unwrap();
+        let should_terminate = Arc::new(AtomicBool::new(false));
+
+        let indexer = BatchIndexer::new(config, db, should_terminate).await;
+
+        assert_eq!(indexer.config.max_retries, 10);
+        assert_eq!(indexer.config.poll_interval, 10);
+        assert_eq!(indexer.config.rpc_timeout, 300);
+        assert_eq!(indexer.config.index_batch_size, 20);
     }
 }
