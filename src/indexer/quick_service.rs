@@ -170,17 +170,17 @@ impl QuickIndexer {
                     "[quick_index] Indexing block range from {} to {} complete.",
                     starting_block, ending_block
                 );
-                break;
+                return Ok(());
             }
 
             // If there's an error during rpc, retry.
-            error!("[quick_index] Rerun from block: {}", starting_block);
+            error!("[quick_index] Error encountered during rpc, retry no. {}. Re-running from block: {}", i, starting_block);
 
             // Exponential backoff
             let backoff = (i as u64).pow(2) * 5;
             tokio::time::sleep(Duration::from_secs(backoff)).await;
         }
 
-        Ok(())
+        Err(anyhow!("Max retries reached. Stopping quick indexing."))
     }
 }

@@ -179,17 +179,18 @@ impl BatchIndexer {
                     "[batch_index] Indexing block range from {} to {} complete.",
                     starting_block, ending_block
                 );
-                break;
+                return Ok(());
+
             }
 
             // If there's an error during rpc, retry.
-            error!("[batch_index] Rerun from block: {}", starting_block);
+            error!("[batch_index] Error encountered during rpc, retry no. {}. Re-running from block: {}", i, starting_block);
 
             // Exponential backoff
             let backoff = (i as u64).pow(2) * 5;
             tokio::time::sleep(Duration::from_secs(backoff)).await;
         }
 
-        Ok(())
+        Err(anyhow!("Max retries reached. Stopping batch indexing."))
     }
 }
