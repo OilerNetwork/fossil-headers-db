@@ -180,7 +180,6 @@ impl BatchIndexer {
                     starting_block, ending_block
                 );
                 return Ok(());
-
             }
 
             // If there's an error during rpc, retry.
