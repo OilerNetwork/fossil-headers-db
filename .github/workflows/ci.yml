@@ -56,9 +56,12 @@ jobs:
           compose-file: "./docker-compose.test.yml"
 
       - name: Install required tools
-        run: cargo install cargo-llvm-cov
+        run: cargo install cargo-llvm-cov && cargo install sqlx-cli --features postgres
 
-      - run: chmod +x scripts/run-coverage.sh
+      - run: chmod +x scripts/run-coverage.sh && chmod +x scripts/run-migrations.sh
+
+      - name: Run migrations
+        run: scripts/run-migrations.sh
 
       - name: Run tests
         run: scripts/run-coverage.sh
