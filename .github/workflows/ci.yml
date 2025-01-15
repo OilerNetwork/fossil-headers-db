@@ -54,6 +54,7 @@ jobs:
         uses: hoverkraft-tech/compose-action@v2.0.2
         with:
           compose-file: "./docker-compose.test.yml"
+          up-flags: "--wait"
 
       - name: Install required tools
         run: cargo install cargo-llvm-cov && cargo install sqlx-cli --features postgres
