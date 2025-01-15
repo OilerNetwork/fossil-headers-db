@@ -327,7 +327,6 @@ pub struct DbConnection {
     pub pool: Pool<Postgres>,
 }
 
-
 impl DbConnection {
     #[allow(dead_code)]
     pub async fn new(db_conn_string: String) -> Result<Arc<Self>> {
