@@ -17,7 +17,7 @@ use crate::{
         block_header::insert_block_header_query,
         index_metadata::{get_index_metadata, update_latest_quick_index_block_number_query},
     },
-    rpc::{self},
+    rpc::{self, EthereumRpcClient},
 };
 
 #[derive(Debug)]

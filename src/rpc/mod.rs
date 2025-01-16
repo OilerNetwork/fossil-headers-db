@@ -283,7 +283,7 @@ async fn make_retrying_rpc_call<T: Serialize, R: for<'de> Deserialize<'de>>(
 }
 
 #[allow(dead_code)]
-pub trait EthereumRpcClient {
+pub trait EthereumRpcProvider {
     fn get_latest_finalized_blocknumber(
         &self,
         timeout: Option<u64>,
@@ -295,14 +295,29 @@ pub trait EthereumRpcClient {
     ) -> impl Future<Output = Result<BlockHeaderWithFullTransaction>> + Send;
 }
 
+#[allow(dead_code)]
+pub trait RpcTransport {
+    fn make_rpc_call<T: Serialize, R: for<'de> Deserialize<'de>>(
+        &self,
+        params: T,
+        timeout: Option<u64>,
+    ) -> impl Future<Output = Result<R>> + Send;
+
+    fn make_retrying_rpc_call<T: Serialize, R: for<'de> Deserialize<'de>>(
+        &self,
+        params: T,
+        timeout: Option<u64>,
+    ) -> impl Future<Output = Result<R>> + Send;
+}
+
 #[derive(Debug, Clone)]
-pub struct HttpEthereumRpcClient {
+pub struct HttpEthereumRpcTransport {
     client: reqwest::Client,
     connection_string: String,
     max_retries: u32,
 }
 
-impl HttpEthereumRpcClient {
+impl HttpEthereumRpcTransport {
     #[allow(dead_code)]
     pub fn new(connection_string: String, max_retries: Option<u32>) -> Self {
         Self {
@@ -311,10 +326,12 @@ impl HttpEthereumRpcClient {
             max_retries: max_retries.unwrap_or(5), // default to 5 max retries.
         }
     }
+}
 
-    async fn make_rpc_call<T: Serialize, R: for<'de> Deserialize<'de>>(
+impl RpcTransport for HttpEthereumRpcTransport {
+    async fn make_rpc_call<T: Serialize + Send + Sync, R: for<'de> Deserialize<'de>>(
         &self,
-        params: &T,
+        params: T,
         timeout: Option<u64>,
     ) -> Result<R> {
         let connection_string = self.connection_string.clone();
@@ -396,7 +413,23 @@ impl HttpEthereumRpcClient {
     }
 }
 
-impl EthereumRpcClient for HttpEthereumRpcClient {
+pub struct EthereumJsonRpcClient<T> {
+    transport: T,
+}
+
+impl<T> EthereumJsonRpcClient<T>
+where
+    T: RpcTransport,
+{
+    pub fn new(transport: T) -> Self {
+        Self { transport }
+    }
+}
+
+impl<T> EthereumRpcProvider for EthereumJsonRpcClient<T>
+where
+    T: 'static + RpcTransport + Send + Sync,
+{
     async fn get_latest_finalized_blocknumber(&self, timeout: Option<u64>) -> Result<i64> {
         let params = RpcRequest {
             jsonrpc: "2.0",
@@ -406,6 +439,7 @@ impl EthereumRpcClient for HttpEthereumRpcClient {
         };
 
         match self
+            .transport
             .make_retrying_rpc_call::<_, BlockHeaderWithEmptyTransaction>(&params, timeout)
             .await
             .context("Failed to get latest block number")
@@ -427,7 +461,8 @@ impl EthereumRpcClient for HttpEthereumRpcClient {
             params: (format!("0x{:x}", number), true),
         };
 
-        self.make_retrying_rpc_call::<_, BlockHeaderWithFullTransaction>(&params, timeout)
+        self.transport
+            .make_retrying_rpc_call::<_, BlockHeaderWithFullTransaction>(&params, timeout)
             .await
     }
 }
@@ -528,7 +563,7 @@ mod tests {
         );
 
         // Set max retries to 2, which shouldn't have any success cases.
-        let client = HttpEthereumRpcClient::new("http://127.0.0.1:8091".to_owned(), Some(2));
+        let client = EthereumJsonRpcClient::new("http://127.0.0.1:8091".to_owned(), Some(2));
         let block = client.get_full_block_by_number(21598014, None);
 
         // Trigger the response
@@ -546,7 +581,9 @@ mod tests {
             vec!["{}".to_string(), rpc_response_string], // introduce an empty response to induce failure
         );
 
-        let client = HttpEthereumRpcClient::new("http://127.0.0.1:8092".to_owned(), None);
+        let client: EthereumJsonRpcClient<HttpEthereumRpcTransport> = EthereumJsonRpcClient::new(
+            HttpEthereumRpcTransport::new("http://127.0.0.1:8092".to_owned(), None),
+        );
         let block = client.get_full_block_by_number(21598014, None);
 
         // Trigger the response
@@ -565,7 +602,7 @@ mod tests {
             vec!["{}".to_string(), rpc_response_string], // introduce an empty response to induce failure
         );
 
-        let client = HttpEthereumRpcClient::new("http://127.0.0.1:8093".to_owned(), None);
+        let client = EthereumJsonRpcClient::new("http://127.0.0.1:8093".to_owned(), None);
         let block_number = client.get_latest_finalized_blocknumber(None);
 
         // Trigger the response
