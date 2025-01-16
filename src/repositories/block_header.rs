@@ -421,11 +421,11 @@ mod tests {
 
     async fn get_fixtures_for_tests() -> Vec<BlockHeaderWithFullTransaction> {
         let block_21598014 =
-            fs::read_to_string("src/repositories/fixtures/eth_getBlockByNumber_21598014.json")
+            fs::read_to_string("tests/fixtures/eth_getBlockByNumber_21598014.json")
                 .await
                 .unwrap();
         let block_21598015 =
-            fs::read_to_string("src/repositories/fixtures/eth_getBlockByNumber_21598015.json")
+            fs::read_to_string("tests/fixtures/eth_getBlockByNumber_21598015.json")
                 .await
                 .unwrap();
 

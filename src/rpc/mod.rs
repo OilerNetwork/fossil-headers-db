@@ -3,7 +3,7 @@ use eyre::{Context, Result};
 use once_cell::sync::Lazy;
 use reqwest::Client;
 use serde::{Deserialize, Serialize};
-use std::time::Duration;
+use std::{future::Future, time::Duration};
 use tokio::time::sleep;
 use tracing::{error, warn};
 
@@ -305,7 +305,7 @@ async fn make_rpc_call<T: Serialize, R: for<'de> Deserialize<'de>>(
     }
 }
 
-async fn make_retrying_rpc_call<T: Serialize, R: for<'de> Deserialize<'de>>(
+async fn make_retrying_rpc_call<T: Serialize, R: for<'de> Deserialize<'de> + Send>(
     params: &T,
     timeout: Option<u64>,
     max_retries: u32,
@@ -331,9 +331,277 @@ async fn make_retrying_rpc_call<T: Serialize, R: for<'de> Deserialize<'de>>(
     }
 }
 
+#[allow(dead_code)]
+pub trait EthereumRpcProvider {
+    fn get_latest_finalized_blocknumber(
+        &self,
+        timeout: Option<u64>,
+    ) -> impl Future<Output = Result<i64>> + Send;
+    fn get_full_block_by_number(
+        &self,
+        number: i64,
+        timeout: Option<u64>,
+    ) -> impl Future<Output = Result<BlockHeaderWithFullTransaction>> + Send;
+}
+
+#[allow(dead_code)]
+pub trait RpcTransport {
+    fn make_rpc_call<T: Serialize + Send + Sync, R: for<'de> Deserialize<'de> + Send>(
+        &self,
+        params: T,
+        timeout: Option<u64>,
+    ) -> impl Future<Output = Result<R>> + Send;
+
+    fn make_retrying_rpc_call<
+        T: Serialize + Send + Sync + Clone,
+        R: for<'de> Deserialize<'de> + Send,
+    >(
+        &self,
+        params: T,
+        timeout: Option<u64>,
+    ) -> impl Future<Output = Result<R>> + Send;
+}
+
+#[derive(Debug, Clone)]
+pub struct HttpEthereumRpcTransport {
+    client: reqwest::Client,
+    connection_string: String,
+    max_retries: u32,
+}
+
+impl HttpEthereumRpcTransport {
+    #[allow(dead_code)]
+    pub fn new(connection_string: String, max_retries: Option<u32>) -> Self {
+        Self {
+            client: reqwest::Client::new(),
+            connection_string,
+            max_retries: max_retries.unwrap_or(5), // default to 5 max retries.
+        }
+    }
+}
+
+impl RpcTransport for HttpEthereumRpcTransport {
+    async fn make_rpc_call<T: Serialize + Send + Sync, R: for<'de> Deserialize<'de> + Send>(
+        &self,
+        params: T,
+        timeout: Option<u64>,
+    ) -> Result<R> {
+        let connection_string = self.connection_string.clone();
+
+        let raw_response = match timeout {
+            Some(seconds) => {
+                self.client
+                    .post(connection_string)
+                    .timeout(Duration::from_secs(seconds))
+                    .json(&params)
+                    .send()
+                    .await
+            }
+            None => {
+                self.client
+                    .post(connection_string)
+                    .json(&params)
+                    .send()
+                    .await
+            }
+        };
+
+        let raw_response = match raw_response {
+            Ok(response) => response,
+            Err(e) => {
+                error!("HTTP request error: {:?}", e);
+                return Err(e.into());
+            }
+        };
+
+        // Attempt to extract JSON from the response
+        let json_response = raw_response.text().await;
+        match json_response {
+            Ok(text) => {
+                // Try to deserialize the response, logging if it fails
+                match serde_json::from_str::<RpcResponse<R>>(&text) {
+                    Ok(parsed) => Ok(parsed.result),
+                    Err(e) => {
+                        error!(
+                            "Deserialization error: {:?}\nResponse snippet: {:?}",
+                            e,
+                            text // Log the entire response
+                        );
+                        Err(e.into())
+                    }
+                }
+            }
+            Err(e) => {
+                error!("Failed to read response body: {:?}", e);
+                Err(e.into())
+            }
+        }
+    }
+
+    async fn make_retrying_rpc_call<
+        T: Serialize + Send + Sync + Clone,
+        R: for<'de> Deserialize<'de> + Send,
+    >(
+        &self,
+        params: T,
+        timeout: Option<u64>,
+    ) -> Result<R> {
+        let mut attempts = 0;
+        loop {
+            match self.make_rpc_call(params.clone(), timeout).await {
+                Ok(result) => return Ok(result),
+                Err(e) => {
+                    attempts += 1;
+                    if attempts > self.max_retries {
+                        warn!("Operation failed with error: {:?}. Max retries reached", e);
+                        return Err(e);
+                    }
+                    let backoff = Duration::from_secs(2_u64.pow(attempts));
+                    warn!(
+                        "Operation failed with error: {:?}. Retrying in {:?} (Attempt {}/{})",
+                        e, backoff, attempts, self.max_retries
+                    );
+                    sleep(backoff).await;
+                }
+            }
+        }
+    }
+}
+
+pub struct EthereumJsonRpcClient<T> {
+    transport: T,
+}
+
+impl<T> EthereumJsonRpcClient<T>
+where
+    T: RpcTransport,
+{
+    pub fn new(transport: T) -> Self {
+        Self { transport }
+    }
+}
+
+impl<T> EthereumRpcProvider for EthereumJsonRpcClient<T>
+where
+    T: 'static + RpcTransport + Send + Sync,
+{
+    async fn get_latest_finalized_blocknumber(&self, timeout: Option<u64>) -> Result<i64> {
+        let params = RpcRequest {
+            jsonrpc: "2.0",
+            id: "0".to_string(),
+            method: "eth_getBlockByNumber",
+            params: ("finalized", false),
+        };
+
+        match self
+            .transport
+            .make_retrying_rpc_call::<_, BlockHeaderWithEmptyTransaction>(&params, timeout)
+            .await
+            .context("Failed to get latest block number")
+        {
+            Ok(blockheader) => Ok(convert_hex_string_to_i64(&blockheader.number)?),
+            Err(e) => Err(e),
+        }
+    }
+
+    async fn get_full_block_by_number(
+        &self,
+        number: i64,
+        timeout: Option<u64>,
+    ) -> Result<BlockHeaderWithFullTransaction> {
+        let params = RpcRequest {
+            jsonrpc: "2.0",
+            id: "0".to_string(),
+            method: "eth_getBlockByNumber",
+            params: (format!("0x{:x}", number), true),
+        };
+
+        self.transport
+            .make_retrying_rpc_call::<_, BlockHeaderWithFullTransaction>(&params, timeout)
+            .await
+    }
+}
+
 #[cfg(test)]
 mod tests {
+    use async_std::fs;
+    use tokio::{
+        io::{AsyncReadExt, AsyncWriteExt},
+        net::TcpListener,
+    };
+
     use super::*;
+    use std::{
+        sync::mpsc::{sync_channel, SyncSender},
+        thread,
+    };
+
+    async fn get_fixtures_for_tests() -> (String, BlockHeaderWithFullTransaction) {
+        let block_21598014_string =
+            fs::read_to_string("tests/fixtures/eth_getBlockByNumber_21598014.json")
+                .await
+                .unwrap();
+
+        let block_21598014_response = serde_json::from_str::<
+            RpcResponse<BlockHeaderWithFullTransaction>,
+        >(&block_21598014_string)
+        .unwrap();
+
+        (block_21598014_string, block_21598014_response.result)
+    }
+
+    // Helper function to start a TCP server that returns predefined JSON-RPC responses
+    // Taken from katana codebase.
+    pub fn start_mock_rpc_server(addr: String, responses: Vec<String>) -> SyncSender<()> {
+        use tokio::runtime::Builder;
+        let (tx, rx) = sync_channel::<()>(1);
+
+        thread::spawn(move || {
+            Builder::new_current_thread()
+                .enable_all()
+                .build()
+                .unwrap()
+                .block_on(async move {
+                    let listener = TcpListener::bind(addr).await.unwrap();
+
+                    let mut counter = 0;
+
+                    // Wait for a signal to return the response.
+                    rx.recv().unwrap();
+
+                    loop {
+                        let (mut socket, _) = listener.accept().await.unwrap();
+
+                        // Read the request, so hyper would not close the connection
+                        let mut buffer = [0; 1024];
+                        let _ = socket.read(&mut buffer).await.unwrap();
+
+                        // Get the response from the pre-determined list, and if the list is
+                        // exhausted, return the last response.
+                        let response = if counter < responses.len() {
+                            responses[counter].clone()
+                        } else {
+                            responses.last().unwrap().clone()
+                        };
+
+                        // After reading, we send the pre-determined response
+                        let http_response = format!(
+                            "HTTP/1.1 200 OK\r\ncontent-length: {}\r\ncontent-type: \
+                             application/json\r\n\r\n{}",
+                            response.len(),
+                            response
+                        );
+
+                        socket.write_all(http_response.as_bytes()).await.unwrap();
+                        socket.flush().await.unwrap();
+                        counter += 1;
+                    }
+                });
+        });
+
+        // Returning the sender to allow controlling the response timing.
+        tx
+    }
 
     #[test]
     fn test_into_should_convert_empty_tx_from_full_tx() {
@@ -469,4 +737,118 @@ mod tests {
             full_tx.parent_beacon_block_root
         );
     }
+
+    #[tokio::test]
+    async fn test_max_retries_should_affect_number_of_retries() {
+        let (rpc_response_string, _) = get_fixtures_for_tests().await;
+        let sender = start_mock_rpc_server(
+            "127.0.0.1:8091".to_owned(),
+            vec![
+                "{}".to_string(),
+                "{}".to_string(),
+                "{}".to_string(),
+                rpc_response_string,
+                "{}".to_string(),
+            ], // introduce empty responses
+        );
+
+        // Set max retries to 2, which shouldn't have any success cases.
+        let client: EthereumJsonRpcClient<HttpEthereumRpcTransport> = EthereumJsonRpcClient::new(
+            HttpEthereumRpcTransport::new("http://127.0.0.1:8091".to_owned(), Some(2)),
+        );
+
+        let block = client.get_full_block_by_number(21598014, None);
+
+        // Trigger the response
+        sender.send(()).unwrap();
+
+        let block = block.await;
+        assert!(block.is_err());
+    }
+
+    #[tokio::test]
+    async fn test_get_full_block_by_number_should_retry_when_failed() {
+        let (rpc_response_string, rpc_response_struct) = get_fixtures_for_tests().await;
+        let sender = start_mock_rpc_server(
+            "127.0.0.1:8092".to_owned(),
+            vec!["{}".to_string(), rpc_response_string], // introduce an empty response to induce failure
+        );
+
+        let client: EthereumJsonRpcClient<HttpEthereumRpcTransport> = EthereumJsonRpcClient::new(
+            HttpEthereumRpcTransport::new("http://127.0.0.1:8092".to_owned(), None),
+        );
+        let block = client.get_full_block_by_number(21598014, None);
+
+        // Trigger the response
+        sender.send(()).unwrap();
+
+        let block = block.await.unwrap();
+        assert_eq!(block.hash, rpc_response_struct.hash);
+        assert_eq!(block.number, rpc_response_struct.number);
+    }
+
+    #[tokio::test]
+    async fn test_get_latest_finalized_blocknumber_should_retry_when_failed() {
+        let (rpc_response_string, rpc_response_struct) = get_fixtures_for_tests().await;
+        let sender = start_mock_rpc_server(
+            "127.0.0.1:8093".to_owned(),
+            vec!["{}".to_string(), rpc_response_string], // introduce an empty response to induce failure
+        );
+
+        let client: EthereumJsonRpcClient<HttpEthereumRpcTransport> = EthereumJsonRpcClient::new(
+            HttpEthereumRpcTransport::new("http://127.0.0.1:8093".to_owned(), None),
+        );
+        let block_number = client.get_latest_finalized_blocknumber(None);
+
+        // Trigger the response
+        sender.send(()).unwrap();
+
+        let block_number = block_number.await.unwrap();
+        assert_eq!(
+            block_number,
+            i64::from_str_radix(rpc_response_struct.number.strip_prefix("0x").unwrap(), 16)
+                .unwrap()
+        );
+    }
+
+    #[tokio::test]
+    async fn test_get_full_block_by_number() {
+        let (rpc_response_string, rpc_response_struct) = get_fixtures_for_tests().await;
+        let sender = start_mock_rpc_server("127.0.0.1:8094".to_owned(), vec![rpc_response_string]);
+
+        let client: EthereumJsonRpcClient<HttpEthereumRpcTransport> = EthereumJsonRpcClient::new(
+            HttpEthereumRpcTransport::new("http://127.0.0.1:8094".to_owned(), None),
+        );
+        let block = client.get_full_block_by_number(21598014, None);
+
+        // Trigger the response
+        sender.send(()).unwrap();
+
+        let block = block.await.unwrap();
+        assert_eq!(block.hash, rpc_response_struct.hash);
+        assert_eq!(block.number, rpc_response_struct.number);
+    }
+
+    #[tokio::test]
+    async fn test_get_latest_finalized_blocknumber() {
+        let (rpc_response_string, rpc_response_struct) = get_fixtures_for_tests().await;
+        let sender = start_mock_rpc_server("127.0.0.1:8095".to_owned(), vec![rpc_response_string]);
+
+        let client: EthereumJsonRpcClient<HttpEthereumRpcTransport> = EthereumJsonRpcClient::new(
+            HttpEthereumRpcTransport::new("http://127.0.0.1:8095".to_owned(), None),
+        );
+        let block_number = client.get_latest_finalized_blocknumber(None);
+
+        // Trigger the response
+        sender.send(()).unwrap();
+
+        let block_number = block_number.await.unwrap();
+        assert_eq!(
+            block_number,
+            i64::from_str_radix(rpc_response_struct.number.strip_prefix("0x").unwrap(), 16)
+                .unwrap()
+        );
+    }
+
+    // TODO: Add more tests for the failure cases.
 }

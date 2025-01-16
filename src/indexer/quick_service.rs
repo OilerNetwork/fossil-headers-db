@@ -203,7 +203,6 @@ impl QuickIndexer {
     }
 }
 
-
 #[cfg(test)]
 mod tests {
     use std::env;
