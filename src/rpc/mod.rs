@@ -66,11 +66,11 @@ pub struct BlockHeaderWithEmptyTransaction {
     pub nonce: Option<String>,
     pub number: String,
     #[serde(rename(deserialize = "receiptsRoot"))]
-    pub receipts_root: String,
+    pub receipts_root: Option<String>,
     #[serde(rename(deserialize = "stateRoot"))]
-    pub state_root: String,
+    pub state_root: Option<String>,
     #[serde(rename(deserialize = "transactionsRoot"))]
-    pub transactions_root: String,
+    pub transactions_root: Option<String>,
     #[serde(rename(deserialize = "parentHash"))]
     pub parent_hash: Option<String>,
     #[serde(rename(deserialize = "miner"))]
@@ -144,6 +144,35 @@ pub struct BlockHeaderWithFullTransaction {
     pub parent_beacon_block_root: Option<String>,
 }
 
+impl From<BlockHeaderWithFullTransaction> for BlockHeaderWithEmptyTransaction {
+    fn from(val: BlockHeaderWithFullTransaction) -> Self {
+        BlockHeaderWithEmptyTransaction {
+            gas_limit: val.gas_limit,
+            gas_used: val.gas_used,
+            base_fee_per_gas: val.base_fee_per_gas,
+            hash: val.hash,
+            nonce: val.nonce,
+            number: val.number,
+            receipts_root: val.receipts_root,
+            state_root: val.state_root,
+            transactions_root: val.transactions_root,
+            miner: val.miner,
+            logs_bloom: val.logs_bloom,
+            difficulty: val.difficulty,
+            total_difficulty: val.total_difficulty,
+            sha3_uncles: val.sha3_uncles,
+            extra_data: val.extra_data,
+            mix_hash: val.mix_hash,
+            parent_hash: val.parent_hash,
+            timestamp: val.timestamp,
+            withdrawals_root: val.withdrawals_root,
+            blob_gas_used: val.blob_gas_used,
+            excess_blob_gas: val.excess_blob_gas,
+            parent_beacon_block_root: val.parent_beacon_block_root,
+        }
+    }
+}
+
 pub async fn get_latest_finalized_blocknumber(timeout: Option<u64>) -> Result<i64> {
     // TODO: Id should be different on every request, this is how request are identified by us and by the node.
     let params = RpcRequest {
@@ -167,6 +196,26 @@ pub async fn get_latest_finalized_blocknumber(timeout: Option<u64>) -> Result<i6
 }
 
 pub async fn get_full_block_by_number(
+    number: i64,
+    timeout: Option<u64>,
+) -> Result<BlockHeaderWithFullTransaction> {
+    let params = RpcRequest {
+        jsonrpc: "2.0",
+        id: "0".to_string(),
+        method: "eth_getBlockByNumber",
+        params: (format!("0x{:x}", number), true),
+    };
+
+    make_retrying_rpc_call::<_, BlockHeaderWithFullTransaction>(
+        &params,
+        timeout,
+        MAX_RETRIES.into(),
+    )
+    .await
+}
+
+#[allow(dead_code)]
+pub async fn get_full_block_only_by_number(
     number: i64,
     timeout: Option<u64>,
 ) -> Result<BlockHeaderWithFullTransaction> {
@@ -279,5 +328,145 @@ async fn make_retrying_rpc_call<T: Serialize, R: for<'de> Deserialize<'de>>(
                 sleep(backoff).await;
             }
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_into_should_convert_empty_tx_from_full_tx() {
+        let full_tx = BlockHeaderWithFullTransaction {
+            gas_limit: "0x0".to_string(),
+            gas_used: "0x0".to_string(),
+            base_fee_per_gas: Some("0x0".to_string()),
+            hash: "0x0".to_string(),
+            nonce: Some("0x0".to_string()),
+            number: "0x0".to_string(),
+            receipts_root: Some("0x0".to_string()),
+            state_root: Some("0x0".to_string()),
+            transactions_root: Some("0x0".to_string()),
+            miner: Some("0x0".to_string()),
+            logs_bloom: Some("0x0".to_string()),
+            difficulty: Some("0x0".to_string()),
+            total_difficulty: Some("0x0".to_string()),
+            sha3_uncles: Some("0x0".to_string()),
+            timestamp: "0x0".to_string(),
+            extra_data: Some("0x0".to_string()),
+            mix_hash: Some("0x0".to_string()),
+            parent_hash: Some("0x0".to_string()),
+            withdrawals_root: Some("0x0".to_string()),
+            blob_gas_used: Some("0x0".to_string()),
+            excess_blob_gas: Some("0x0".to_string()),
+            parent_beacon_block_root: Some("0x0".to_string()),
+            transactions: vec![Transaction {
+                hash: "0x0".to_string(),
+                block_number: "0x0".to_string(),
+                transaction_index: "0x0".to_string(),
+                value: "0x0".to_string(),
+                gas_price: Some("0x0".to_string()),
+                gas: "0x0".to_string(),
+                from: Some("0x0".to_string()),
+                to: Some("0x0".to_string()),
+                max_priority_fee_per_gas: Some("0x0".to_string()),
+                max_fee_per_gas: Some("0x0".to_string()),
+                chain_id: Some("0x0".to_string()),
+            }],
+        };
+
+        let empty_tx: BlockHeaderWithEmptyTransaction = full_tx.clone().into();
+        assert_eq!(empty_tx.number, full_tx.number);
+        assert_eq!(empty_tx.hash, full_tx.hash);
+        assert_eq!(empty_tx.nonce, full_tx.nonce);
+        assert_eq!(empty_tx.parent_hash, full_tx.parent_hash);
+        assert_eq!(empty_tx.gas_limit, full_tx.gas_limit);
+        assert_eq!(empty_tx.gas_used, full_tx.gas_used);
+        assert_eq!(empty_tx.base_fee_per_gas, full_tx.base_fee_per_gas);
+        assert_eq!(empty_tx.receipts_root, full_tx.receipts_root);
+        assert_eq!(empty_tx.state_root, full_tx.state_root);
+        assert_eq!(empty_tx.transactions_root, full_tx.transactions_root);
+        assert_eq!(empty_tx.miner, full_tx.miner);
+        assert_eq!(empty_tx.logs_bloom, full_tx.logs_bloom);
+        assert_eq!(empty_tx.difficulty, full_tx.difficulty);
+        assert_eq!(empty_tx.total_difficulty, full_tx.total_difficulty);
+        assert_eq!(empty_tx.sha3_uncles, full_tx.sha3_uncles);
+        assert_eq!(empty_tx.timestamp, full_tx.timestamp);
+        assert_eq!(empty_tx.extra_data, full_tx.extra_data);
+        assert_eq!(empty_tx.mix_hash, full_tx.mix_hash);
+        assert_eq!(empty_tx.withdrawals_root, full_tx.withdrawals_root);
+        assert_eq!(empty_tx.blob_gas_used, full_tx.blob_gas_used);
+        assert_eq!(empty_tx.excess_blob_gas, full_tx.excess_blob_gas);
+        assert_eq!(
+            empty_tx.parent_beacon_block_root,
+            full_tx.parent_beacon_block_root
+        );
+    }
+
+    #[test]
+    fn test_from_should_convert_empty_tx_from_full_tx() {
+        let full_tx = BlockHeaderWithFullTransaction {
+            gas_limit: "0x0".to_string(),
+            gas_used: "0x0".to_string(),
+            base_fee_per_gas: Some("0x0".to_string()),
+            hash: "0x0".to_string(),
+            nonce: Some("0x0".to_string()),
+            number: "0x0".to_string(),
+            receipts_root: Some("0x0".to_string()),
+            state_root: Some("0x0".to_string()),
+            transactions_root: Some("0x0".to_string()),
+            miner: Some("0x0".to_string()),
+            logs_bloom: Some("0x0".to_string()),
+            difficulty: Some("0x0".to_string()),
+            total_difficulty: Some("0x0".to_string()),
+            sha3_uncles: Some("0x0".to_string()),
+            timestamp: "0x0".to_string(),
+            extra_data: Some("0x0".to_string()),
+            mix_hash: Some("0x0".to_string()),
+            parent_hash: Some("0x0".to_string()),
+            withdrawals_root: Some("0x0".to_string()),
+            blob_gas_used: Some("0x0".to_string()),
+            excess_blob_gas: Some("0x0".to_string()),
+            parent_beacon_block_root: Some("0x0".to_string()),
+            transactions: vec![Transaction {
+                hash: "0x0".to_string(),
+                block_number: "0x0".to_string(),
+                transaction_index: "0x0".to_string(),
+                value: "0x0".to_string(),
+                gas_price: Some("0x0".to_string()),
+                gas: "0x0".to_string(),
+                from: Some("0x0".to_string()),
+                to: Some("0x0".to_string()),
+                max_priority_fee_per_gas: Some("0x0".to_string()),
+                max_fee_per_gas: Some("0x0".to_string()),
+                chain_id: Some("0x0".to_string()),
+            }],
+        };
+        let empty_tx = BlockHeaderWithEmptyTransaction::from(full_tx.clone());
+        assert_eq!(empty_tx.number, full_tx.number);
+        assert_eq!(empty_tx.hash, full_tx.hash);
+        assert_eq!(empty_tx.nonce, full_tx.nonce);
+        assert_eq!(empty_tx.parent_hash, full_tx.parent_hash);
+        assert_eq!(empty_tx.gas_limit, full_tx.gas_limit);
+        assert_eq!(empty_tx.gas_used, full_tx.gas_used);
+        assert_eq!(empty_tx.base_fee_per_gas, full_tx.base_fee_per_gas);
+        assert_eq!(empty_tx.receipts_root, full_tx.receipts_root);
+        assert_eq!(empty_tx.state_root, full_tx.state_root);
+        assert_eq!(empty_tx.transactions_root, full_tx.transactions_root);
+        assert_eq!(empty_tx.miner, full_tx.miner);
+        assert_eq!(empty_tx.logs_bloom, full_tx.logs_bloom);
+        assert_eq!(empty_tx.difficulty, full_tx.difficulty);
+        assert_eq!(empty_tx.total_difficulty, full_tx.total_difficulty);
+        assert_eq!(empty_tx.sha3_uncles, full_tx.sha3_uncles);
+        assert_eq!(empty_tx.timestamp, full_tx.timestamp);
+        assert_eq!(empty_tx.extra_data, full_tx.extra_data);
+        assert_eq!(empty_tx.mix_hash, full_tx.mix_hash);
+        assert_eq!(empty_tx.withdrawals_root, full_tx.withdrawals_root);
+        assert_eq!(empty_tx.blob_gas_used, full_tx.blob_gas_used);
+        assert_eq!(empty_tx.excess_blob_gas, full_tx.excess_blob_gas);
+        assert_eq!(
+            empty_tx.parent_beacon_block_root,
+            full_tx.parent_beacon_block_root
+        );
     }
 }

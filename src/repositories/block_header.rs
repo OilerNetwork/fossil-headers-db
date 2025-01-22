@@ -2,7 +2,7 @@ use eyre::{ContextCompat, Result};
 use sqlx::{query_builder::Separated, Postgres, QueryBuilder};
 
 use crate::{
-    rpc::{BlockHeaderWithFullTransaction, Transaction},
+    rpc::{BlockHeaderWithEmptyTransaction, BlockHeaderWithFullTransaction, Transaction},
     utils::{convert_hex_string_to_i32, convert_hex_string_to_i64},
 };
 
@@ -52,7 +52,7 @@ pub struct BlockHeaderDto {
 
 #[allow(dead_code)]
 fn convert_rpc_blockheader_to_dto(
-    block_header: BlockHeaderWithFullTransaction,
+    block_header: BlockHeaderWithEmptyTransaction,
 ) -> Result<BlockHeaderDto> {
     // These fields should be converted successfully, and if its not converted successfully,
     // it should be considered an unintended bug.
@@ -127,7 +127,7 @@ fn convert_rpc_transaction_to_dto(transaction: Transaction) -> Result<Transactio
 }
 
 #[allow(dead_code)]
-// Seems that using transaction with multi row inserts seem to be the fastest
+// Using transaction with multi row inserts seem to be the fastest
 pub async fn insert_block_header_query(
     db_tx: &mut sqlx::Transaction<'_, Postgres>,
     block_headers: Vec<BlockHeaderWithFullTransaction>,
@@ -136,7 +136,7 @@ pub async fn insert_block_header_query(
     let mut flattened_transactions = Vec::new();
 
     for header in block_headers.iter() {
-        let dto = convert_rpc_blockheader_to_dto(header.clone())?;
+        let dto = convert_rpc_blockheader_to_dto(header.clone().into())?;
         formatted_block_headers.push(dto);
 
         // Collect the transactions here and get the queries.
@@ -274,6 +274,88 @@ async fn insert_block_txs_query(
     Ok(())
 }
 
+#[allow(dead_code)]
+pub async fn insert_block_header_only_query(
+    db_tx: &mut sqlx::Transaction<'_, Postgres>,
+    block_headers: Vec<BlockHeaderWithEmptyTransaction>,
+) -> Result<()> {
+    let mut formatted_block_headers: Vec<BlockHeaderDto> = Vec::with_capacity(block_headers.len());
+
+    for header in block_headers.iter() {
+        let dto = convert_rpc_blockheader_to_dto(header.clone())?;
+        formatted_block_headers.push(dto);
+    }
+
+    let mut query_builder: QueryBuilder<Postgres> = QueryBuilder::new(
+        "INSERT INTO blockheaders (
+                block_hash, number, gas_limit, gas_used, base_fee_per_gas,
+                nonce, transaction_root, receipts_root, state_root,
+                parent_hash, miner, logs_bloom, difficulty, totalDifficulty,
+                sha3_uncles, timestamp, extra_data, mix_hash, withdrawals_root,
+                blob_gas_used, excess_blob_gas, parent_beacon_block_root
+            )",
+    );
+
+    query_builder.push_values(
+        formatted_block_headers.iter(),
+        |mut b: Separated<'_, '_, Postgres, &'static str>, block_header| {
+            // Convert values and unwrap_or_default() to handle errors
+            b.push_bind(&block_header.block_hash)
+                .push_bind(block_header.number)
+                .push_bind(block_header.gas_limit)
+                .push_bind(block_header.gas_used)
+                .push_bind(&block_header.base_fee_per_gas)
+                .push_bind(&block_header.nonce)
+                .push_bind(&block_header.transaction_root)
+                .push_bind(&block_header.receipts_root)
+                .push_bind(&block_header.state_root)
+                .push_bind(&block_header.parent_hash)
+                .push_bind(&block_header.miner)
+                .push_bind(&block_header.logs_bloom)
+                .push_bind(&block_header.difficulty)
+                .push_bind(&block_header.total_difficulty)
+                .push_bind(&block_header.sha3_uncles)
+                .push_bind(block_header.timestamp.to_string())
+                .push_bind(&block_header.extra_data)
+                .push_bind(&block_header.mix_hash)
+                .push_bind(&block_header.withdrawals_root)
+                .push_bind(&block_header.blob_gas_used)
+                .push_bind(&block_header.excess_blob_gas)
+                .push_bind(&block_header.parent_beacon_block_root);
+        },
+    );
+
+    query_builder.push(
+        r#"
+        ON CONFLICT (number)
+            DO UPDATE SET
+                block_hash = EXCLUDED.block_hash,
+                gas_limit = EXCLUDED.gas_limit,
+                gas_used = EXCLUDED.gas_used,
+                base_fee_per_gas = EXCLUDED.base_fee_per_gas,
+                nonce = EXCLUDED.nonce,
+                transaction_root = EXCLUDED.transaction_root,
+                receipts_root = EXCLUDED.receipts_root,
+                state_root = EXCLUDED.state_root,
+                parent_hash = EXCLUDED.parent_hash,
+                miner = EXCLUDED.miner,
+                logs_bloom = EXCLUDED.logs_bloom,
+                difficulty = EXCLUDED.difficulty,
+                totalDifficulty = EXCLUDED.totalDifficulty,
+                sha3_uncles = EXCLUDED.sha3_uncles,
+                timestamp = EXCLUDED.timestamp,
+                extra_data = EXCLUDED.extra_data,
+                mix_hash = EXCLUDED.mix_hash,
+                withdrawals_root = EXCLUDED.withdrawals_root,
+                blob_gas_used = EXCLUDED.blob_gas_used,
+                excess_blob_gas = EXCLUDED.excess_blob_gas,
+                parent_beacon_block_root = EXCLUDED.parent_beacon_block_root;"#,
+    );
+
+    query_builder.build().execute(&mut **db_tx).await?;
+    Ok(())
+}
+
 #[serial_test::serial]
 #[cfg(test)]
 mod tests {
@@ -382,7 +464,7 @@ mod tests {
         assert!(result.is_ok());
 
         let block_header_to_compare =
-            convert_rpc_blockheader_to_dto(block_headers[0].clone()).unwrap();
+            convert_rpc_blockheader_to_dto(block_headers[0].clone().into()).unwrap();
         let block_header_in_db = result.unwrap();
 
         assert_block_header_eq(block_header_in_db, block_header_to_compare);
@@ -412,7 +494,7 @@ mod tests {
         assert!(result.is_ok());
 
         let block_header_to_compare =
-            convert_rpc_blockheader_to_dto(block_headers[0].clone()).unwrap();
+            convert_rpc_blockheader_to_dto(block_headers[0].clone().into()).unwrap();
         let block_header_in_db = result.unwrap();
         assert_block_header_eq(block_header_in_db, block_header_to_compare);
 
@@ -425,7 +507,7 @@ mod tests {
         assert!(result.is_ok());
 
         let block_header_to_compare =
-            convert_rpc_blockheader_to_dto(block_headers[1].clone()).unwrap();
+            convert_rpc_blockheader_to_dto(block_headers[1].clone().into()).unwrap();
         let block_header_in_db = result.unwrap();
         assert_block_header_eq(block_header_in_db, block_header_to_compare);
 
@@ -485,7 +567,8 @@ mod tests {
                 .await;
         assert!(result.is_ok());
         let block_header_to_compare =
-            convert_rpc_blockheader_to_dto(same_block_header_with_diff_values.clone()).unwrap();
+            convert_rpc_blockheader_to_dto(same_block_header_with_diff_values.clone().into())
+                .unwrap();
         let block_header_in_db = result.unwrap();
         assert_block_header_eq(block_header_in_db, block_header_to_compare);
 
@@ -622,6 +705,148 @@ mod tests {
             convert_rpc_transaction_to_dto(same_transaction_with_diff_values.clone()).unwrap();
         let transaction_in_db = result.unwrap();
         assert_transactions_eq(transaction_in_db, transaction_to_compare);
+
+        tx.rollback().await.unwrap();
+    }
+
+    #[tokio::test]
+    async fn test_insert_block_header_only_success() {
+        let url = get_test_db_connection();
+        let db = DbConnection::new(url).await.unwrap();
+
+        let block_headers = get_fixtures_for_tests().await;
+
+        // Insert the block header
+        let mut tx = db.pool.begin().await.unwrap();
+        insert_block_header_only_query(&mut tx, vec![block_headers[0].clone().into()])
+            .await
+            .unwrap();
+
+        // Check if the block header was inserted
+        let result: Result<BlockHeaderDto, sqlx::Error> =
+            sqlx::query_as("SELECT * FROM blockheaders WHERE number = $1")
+                .bind(convert_hex_string_to_i64(&block_headers[0].number).unwrap())
+                .fetch_one(&mut *tx)
+                .await;
+        assert!(result.is_ok());
+
+        let block_header_to_compare =
+            convert_rpc_blockheader_to_dto(block_headers[0].clone().into()).unwrap();
+        let block_header_in_db = result.unwrap();
+
+        assert_block_header_eq(block_header_in_db, block_header_to_compare);
+
+        tx.rollback().await.unwrap();
+    }
+
+    #[tokio::test]
+    async fn test_insert_multiple_block_header_only_success() {
+        let url = get_test_db_connection();
+        let db = DbConnection::new(url).await.unwrap();
+
+        let block_headers = get_fixtures_for_tests().await;
+
+        // Insert the block header
+        let mut tx = db.pool.begin().await.unwrap();
+        insert_block_header_only_query(
+            &mut tx,
+            block_headers
+                .clone()
+                .iter()
+                .map(|f| f.clone().into())
+                .collect(),
+        )
+        .await
+        .unwrap();
+
+        // Check if the first block is inserted
+        let result: Result<BlockHeaderDto, sqlx::Error> =
+            sqlx::query_as("SELECT * FROM blockheaders WHERE number = $1")
+                .bind(convert_hex_string_to_i64(&block_headers[0].number).unwrap())
+                .fetch_one(&mut *tx)
+                .await;
+        assert!(result.is_ok());
+
+        let block_header_to_compare =
+            convert_rpc_blockheader_to_dto(block_headers[0].clone().into()).unwrap();
+        let block_header_in_db = result.unwrap();
+        assert_block_header_eq(block_header_in_db, block_header_to_compare);
+
+        // Check if the second block is inserted
+        let result: Result<BlockHeaderDto, sqlx::Error> =
+            sqlx::query_as("SELECT * FROM blockheaders WHERE number = $1")
+                .bind(convert_hex_string_to_i64(&block_headers[1].number).unwrap())
+                .fetch_one(&mut *tx)
+                .await;
+        assert!(result.is_ok());
+
+        let block_header_to_compare =
+            convert_rpc_blockheader_to_dto(block_headers[1].clone().into()).unwrap();
+        let block_header_in_db = result.unwrap();
+        assert_block_header_eq(block_header_in_db, block_header_to_compare);
+
+        tx.rollback().await.unwrap();
+    }
+
+    #[tokio::test]
+    async fn test_insert_block_header_only_failed_hex_conversion() {
+        let url = get_test_db_connection();
+        let db = DbConnection::new(url).await.unwrap();
+
+        let block_headers = get_fixtures_for_tests().await;
+
+        // Insert the block header
+        let mut tx = db.pool.begin().await.unwrap();
+        let block_header = block_headers[0].clone();
+        let block_header = BlockHeaderWithFullTransaction {
+            number: "0xg".to_string(),
+            ..block_header
+        };
+
+        let result = insert_block_header_only_query(&mut tx, vec![block_header.into()]).await;
+        assert!(result.is_err());
+
+        tx.rollback().await.unwrap();
+    }
+
+    #[tokio::test]
+    async fn test_insert_block_header_only_with_number_conflict() {
+        let url = get_test_db_connection();
+        let db = DbConnection::new(url).await.unwrap();
+
+        let block_headers = get_fixtures_for_tests().await;
+
+        // Insert the block header
+        let mut tx = db.pool.begin().await.unwrap();
+        insert_block_header_only_query(&mut tx, vec![block_headers[0].clone().into()])
+            .await
+            .unwrap();
+
+        // Insert the block header again
+        let same_block_header_with_diff_values = block_headers[0].clone();
+        let same_block_header_with_diff_values = BlockHeaderWithFullTransaction {
+            gas_limit: "0x1".to_string(),
+            ..same_block_header_with_diff_values
+        };
+        let result = insert_block_header_only_query(
+            &mut tx,
+            vec![same_block_header_with_diff_values.clone().into()],
+        )
+        .await;
+        assert!(result.is_ok());
+
+        // See if its properly updated
+        let result: Result<BlockHeaderDto, sqlx::Error> =
+            sqlx::query_as("SELECT * FROM blockheaders WHERE number = $1")
+                .bind(convert_hex_string_to_i64(&block_headers[0].number).unwrap())
+                .fetch_one(&mut *tx)
+                .await;
+        assert!(result.is_ok());
+        let block_header_to_compare =
+            convert_rpc_blockheader_to_dto(same_block_header_with_diff_values.clone().into())
+                .unwrap();
+        let block_header_in_db = result.unwrap();
+        assert_block_header_eq(block_header_in_db, block_header_to_compare);
 
         tx.rollback().await.unwrap();
     }

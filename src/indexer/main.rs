@@ -46,6 +46,11 @@ pub async fn main() -> Result<()> {
     let db_conn_string =
         env::var("DB_CONNECTION_STRING").context("DB_CONNECTION_STRING must be set")?;
 
+    let should_index_txs = env::var("INDEX_TRANSACTIONS")
+        .unwrap_or_else(|_| "false".to_string())
+        .parse::<bool>()
+        .context("INDEX_TRANSACTIONS must be set")?;
+
     // Initialize tracing subscriber
     fmt().init();
 
@@ -60,7 +65,7 @@ pub async fn main() -> Result<()> {
     setup_ctrlc_handler(Arc::clone(&should_terminate))?;
 
     // Start by checking and updating the current status in the db.
-    // let indexing_metadata = get_base_index_metadata(db.clone()).await?;
+    get_base_index_metadata(db.clone()).await?;
     let router_terminator = Arc::clone(&should_terminate);
 
     // Setup the router which allows us to query health status and operations
@@ -79,9 +84,16 @@ pub async fn main() -> Result<()> {
         })?;
 
     // Start the quick indexer
-    let quick_index_config = QuickIndexConfig::default();
-    let quick_indexer =
-        QuickIndexer::new(quick_index_config, db.clone(), should_terminate.clone()).await;
+    let quick_indexer = QuickIndexer::new(
+        QuickIndexConfig {
+            should_index_txs,
+            index_batch_size: 100, // larger size since we are not indexing txs
+            ..Default::default()
+        },
+        db.clone(),
+        should_terminate.clone(),
+    )
+    .await;
 
     let quick_indexer_handle = thread::Builder::new()
         .name("[quick_index]".to_owned())
@@ -96,9 +108,16 @@ pub async fn main() -> Result<()> {
         })?;
 
     // Start the batch indexer
-    let batch_index_config = BatchIndexConfig::default();
-    let batch_indexer =
-        BatchIndexer::new(batch_index_config, db.clone(), should_terminate.clone()).await;
+    let batch_indexer = BatchIndexer::new(
+        BatchIndexConfig {
+            should_index_txs,
+            index_batch_size: 100, // larger size since we are not indexing txs
+            ..Default::default()
+        },
+        db.clone(),
+        should_terminate.clone(),
+    )
+    .await;
 
     let batch_indexer_handle = thread::Builder::new()
         .name("[batch_index]".to_owned())

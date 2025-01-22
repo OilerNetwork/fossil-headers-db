@@ -14,7 +14,7 @@ use tracing::{error, info, warn};
 use crate::{
     db::DbConnection,
     repositories::{
-        block_header::insert_block_header_query,
+        block_header::{insert_block_header_only_query, insert_block_header_query},
         index_metadata::{get_index_metadata, update_backfilling_block_number_query},
     },
     rpc,
@@ -27,6 +27,7 @@ pub struct BatchIndexConfig {
     pub poll_interval: u32,
     pub rpc_timeout: u32,
     pub index_batch_size: u32,
+    pub should_index_txs: bool,
 }
 
 impl Default for BatchIndexConfig {
@@ -36,6 +37,7 @@ impl Default for BatchIndexConfig {
             poll_interval: 10,
             rpc_timeout: 300,
             index_batch_size: 50,
+            should_index_txs: false,
         }
     }
 }
@@ -139,10 +141,17 @@ impl BatchIndexer {
             let rpc_block_headers_futures: Vec<_> = block_range
                 .iter()
                 .map(|block_number| {
-                    task::spawn(rpc::get_full_block_by_number(
-                        *block_number,
-                        Some(timeout.into()),
-                    ))
+                    if self.config.should_index_txs {
+                        task::spawn(rpc::get_full_block_by_number(
+                            *block_number,
+                            Some(timeout.into()),
+                        ))
+                    } else {
+                        task::spawn(rpc::get_full_block_only_by_number(
+                            *block_number,
+                            Some(timeout.into()),
+                        ))
+                    }
                 })
                 .collect();
 
@@ -169,7 +178,16 @@ impl BatchIndexer {
             if !has_err {
                 let mut db_tx = self.db.pool.begin().await?;
 
-                insert_block_header_query(&mut db_tx, block_headers).await?;
+                if self.config.should_index_txs {
+                    insert_block_header_query(&mut db_tx, block_headers).await?;
+                } else {
+                    insert_block_header_only_query(
+                        &mut db_tx,
+                        block_headers.iter().map(|h| h.clone().into()).collect(),
+                    )
+                    .await?;
+                }
+
                 update_backfilling_block_number_query(&mut db_tx, starting_block).await?;
 
                 // Commit at the end
