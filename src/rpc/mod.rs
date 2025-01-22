@@ -7,6 +7,9 @@ use std::{future::Future, time::Duration};
 use tokio::time::sleep;
 use tracing::{error, warn};
 
+#[cfg(test)]
+use std::sync::mpsc::SyncSender;
+
 // TODO: instead of keeping this static, make it passable as a dependency.
 // This should allow us to test this module.
 static CLIENT: Lazy<Client> = Lazy::new(Client::new);
@@ -344,32 +347,14 @@ pub trait EthereumRpcProvider {
     ) -> impl Future<Output = Result<BlockHeaderWithFullTransaction>> + Send;
 }
 
-#[allow(dead_code)]
-pub trait RpcTransport {
-    fn make_rpc_call<T: Serialize + Send + Sync, R: for<'de> Deserialize<'de> + Send>(
-        &self,
-        params: T,
-        timeout: Option<u64>,
-    ) -> impl Future<Output = Result<R>> + Send;
-
-    fn make_retrying_rpc_call<
-        T: Serialize + Send + Sync + Clone,
-        R: for<'de> Deserialize<'de> + Send,
-    >(
-        &self,
-        params: T,
-        timeout: Option<u64>,
-    ) -> impl Future<Output = Result<R>> + Send;
-}
-
 #[derive(Debug, Clone)]
-pub struct HttpEthereumRpcTransport {
+pub struct EthereumJsonRpcClient {
     client: reqwest::Client,
     connection_string: String,
     max_retries: u32,
 }
 
-impl HttpEthereumRpcTransport {
+impl EthereumJsonRpcClient {
     #[allow(dead_code)]
     pub fn new(connection_string: String, max_retries: Option<u32>) -> Self {
         Self {
@@ -380,7 +365,7 @@ impl HttpEthereumRpcTransport {
     }
 }
 
-impl RpcTransport for HttpEthereumRpcTransport {
+impl EthereumJsonRpcClient {
     async fn make_rpc_call<T: Serialize + Send + Sync, R: for<'de> Deserialize<'de> + Send>(
         &self,
         params: T,
@@ -468,23 +453,7 @@ impl RpcTransport for HttpEthereumRpcTransport {
     }
 }
 
-pub struct EthereumJsonRpcClient<T> {
-    transport: T,
-}
-
-impl<T> EthereumJsonRpcClient<T>
-where
-    T: RpcTransport,
-{
-    pub fn new(transport: T) -> Self {
-        Self { transport }
-    }
-}
-
-impl<T> EthereumRpcProvider for EthereumJsonRpcClient<T>
-where
-    T: 'static + RpcTransport + Send + Sync,
-{
+impl EthereumRpcProvider for EthereumJsonRpcClient {
     async fn get_latest_finalized_blocknumber(&self, timeout: Option<u64>) -> Result<i64> {
         let params = RpcRequest {
             jsonrpc: "2.0",
@@ -494,7 +463,6 @@ where
         };
 
         match self
-            .transport
             .make_retrying_rpc_call::<_, BlockHeaderWithEmptyTransaction>(&params, timeout)
             .await
             .context("Failed to get latest block number")
@@ -516,24 +484,79 @@ where
             params: (format!("0x{:x}", number), true),
         };
 
-        self.transport
-            .make_retrying_rpc_call::<_, BlockHeaderWithFullTransaction>(&params, timeout)
+        self.make_retrying_rpc_call::<_, BlockHeaderWithFullTransaction>(&params, timeout)
             .await
     }
 }
 
+// Helper function to start a TCP server that returns predefined JSON-RPC responses
+// Inspired by the katana codebase tests.
 #[cfg(test)]
-mod tests {
-    use async_std::fs;
+pub fn start_mock_rpc_server(addr: String, responses: Vec<String>) -> SyncSender<()> {
+    use std::{sync::mpsc::sync_channel, thread};
+    use tokio::runtime::Builder;
     use tokio::{
         io::{AsyncReadExt, AsyncWriteExt},
         net::TcpListener,
     };
+    let (tx, rx) = sync_channel::<()>(1);
+
+    thread::spawn(move || {
+        Builder::new_current_thread()
+            .enable_all()
+            .build()
+            .unwrap()
+            .block_on(async move {
+                let listener = TcpListener::bind(addr).await.unwrap();
+
+                let mut counter = 0;
+
+                // Wait for a signal to return the response.
+                rx.recv().unwrap();
+
+                loop {
+                    let (mut socket, _) = listener.accept().await.unwrap();
+
+                    // Read the request, so hyper would not close the connection
+                    let mut buffer = [0; 1024];
+                    let _ = socket.read(&mut buffer).await.unwrap();
+
+                    // Get the response from the pre-determined list, and if the list is
+                    // exhausted, return the last response.
+                    let response = if counter < responses.len() {
+                        responses[counter].clone()
+                    } else {
+                        responses.last().unwrap().clone()
+                    };
+
+                    // After reading, we send the pre-determined response
+                    let http_response = format!(
+                        "HTTP/1.1 200 OK\r\ncontent-length: {}\r\ncontent-type: \
+                             application/json\r\n\r\n{}",
+                        response.len(),
+                        response
+                    );
+
+                    socket.write_all(http_response.as_bytes()).await.unwrap();
+                    socket.flush().await.unwrap();
+                    counter += 1;
+                }
+            });
+    });
+
+    // Returning the sender to allow controlling the response timing.
+    tx
+}
+
+#[cfg(test)]
+mod tests {
+    use std::{sync::mpsc::sync_channel, thread};
 
     use super::*;
-    use std::{
-        sync::mpsc::{sync_channel, SyncSender},
-        thread,
+    use tokio::{
+        fs,
+        io::{AsyncReadExt, AsyncWriteExt},
+        net::TcpListener,
     };
 
     async fn get_fixtures_for_tests() -> (String, BlockHeaderWithFullTransaction) {
@@ -753,9 +776,7 @@ mod tests {
         );
 
         // Set max retries to 2, which shouldn't have any success cases.
-        let client: EthereumJsonRpcClient<HttpEthereumRpcTransport> = EthereumJsonRpcClient::new(
-            HttpEthereumRpcTransport::new("http://127.0.0.1:8091".to_owned(), Some(2)),
-        );
+        let client = EthereumJsonRpcClient::new("http://127.0.0.1:8091".to_owned(), Some(2));
 
         let block = client.get_full_block_by_number(21598014, None);
 
@@ -774,9 +795,7 @@ mod tests {
             vec!["{}".to_string(), rpc_response_string], // introduce an empty response to induce failure
         );
 
-        let client: EthereumJsonRpcClient<HttpEthereumRpcTransport> = EthereumJsonRpcClient::new(
-            HttpEthereumRpcTransport::new("http://127.0.0.1:8092".to_owned(), None),
-        );
+        let client = EthereumJsonRpcClient::new("http://127.0.0.1:8092".to_owned(), None);
         let block = client.get_full_block_by_number(21598014, None);
 
         // Trigger the response
@@ -795,9 +814,7 @@ mod tests {
             vec!["{}".to_string(), rpc_response_string], // introduce an empty response to induce failure
         );
 
-        let client: EthereumJsonRpcClient<HttpEthereumRpcTransport> = EthereumJsonRpcClient::new(
-            HttpEthereumRpcTransport::new("http://127.0.0.1:8093".to_owned(), None),
-        );
+        let client = EthereumJsonRpcClient::new("http://127.0.0.1:8093".to_owned(), None);
         let block_number = client.get_latest_finalized_blocknumber(None);
 
         // Trigger the response
@@ -816,9 +833,7 @@ mod tests {
         let (rpc_response_string, rpc_response_struct) = get_fixtures_for_tests().await;
         let sender = start_mock_rpc_server("127.0.0.1:8094".to_owned(), vec![rpc_response_string]);
 
-        let client: EthereumJsonRpcClient<HttpEthereumRpcTransport> = EthereumJsonRpcClient::new(
-            HttpEthereumRpcTransport::new("http://127.0.0.1:8094".to_owned(), None),
-        );
+        let client = EthereumJsonRpcClient::new("http://127.0.0.1:8094".to_owned(), None);
         let block = client.get_full_block_by_number(21598014, None);
 
         // Trigger the response
@@ -834,9 +849,7 @@ mod tests {
         let (rpc_response_string, rpc_response_struct) = get_fixtures_for_tests().await;
         let sender = start_mock_rpc_server("127.0.0.1:8095".to_owned(), vec![rpc_response_string]);
 
-        let client: EthereumJsonRpcClient<HttpEthereumRpcTransport> = EthereumJsonRpcClient::new(
-            HttpEthereumRpcTransport::new("http://127.0.0.1:8095".to_owned(), None),
-        );
+        let client = EthereumJsonRpcClient::new("http://127.0.0.1:8095".to_owned(), None);
         let block_number = client.get_latest_finalized_blocknumber(None);
 
         // Trigger the response
