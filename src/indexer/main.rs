@@ -17,7 +17,8 @@ use fossil_headers_db::{
     repositories::index_metadata::{
         get_index_metadata, set_initial_indexing_status, IndexMetadataDto,
     },
-    router, rpc,
+    router,
+    rpc::{self, EthereumJsonRpcClient},
 };
 use tracing::{error, info};
 use tracing_subscriber::fmt;
@@ -27,7 +28,8 @@ pub async fn get_base_index_metadata(db: Arc<DbConnection>) -> Result<IndexMetad
         return Ok(metadata);
     }
 
-    let latest_block_number = rpc::get_latest_finalized_blocknumber(None).await?;
+    // Set current latest block number to the latest block number - 1 to make sure we don't miss the new blocks
+    let latest_block_number = rpc::get_latest_finalized_blocknumber(None).await? - 1;
 
     set_initial_indexing_status(db.clone(), latest_block_number, latest_block_number, true).await?;
 
@@ -45,6 +47,8 @@ pub async fn main() -> Result<()> {
 
     let db_conn_string =
         env::var("DB_CONNECTION_STRING").context("DB_CONNECTION_STRING must be set")?;
+    let connection_string =
+        env::var("NODE_CONNECTION_STRING").context("NODE_CONNECTION_STRING not set")?;
 
     let should_index_txs = env::var("INDEX_TRANSACTIONS")
         .unwrap_or_else(|_| "false".to_string())
@@ -57,6 +61,8 @@ pub async fn main() -> Result<()> {
     // Setup database connection
     info!("Connecting to DB");
     let db = DbConnection::new(db_conn_string).await?;
+
+    let rpc_client = Arc::new(EthereumJsonRpcClient::new(connection_string, 5));
 
     info!("Starting Indexer");
 
@@ -91,6 +97,7 @@ pub async fn main() -> Result<()> {
             ..Default::default()
         },
         db.clone(),
+        rpc_client.clone(),
         should_terminate.clone(),
     )
     .await;
@@ -115,6 +122,7 @@ pub async fn main() -> Result<()> {
             ..Default::default()
         },
         db.clone(),
+        rpc_client.clone(),
         should_terminate.clone(),
     )
     .await;

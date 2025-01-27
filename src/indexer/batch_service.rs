@@ -15,9 +15,11 @@ use crate::{
     db::DbConnection,
     repositories::{
         block_header::{insert_block_header_only_query, insert_block_header_query},
-        index_metadata::{get_index_metadata, update_backfilling_block_number_query},
+        index_metadata::{
+            get_index_metadata, set_is_backfilling, update_backfilling_block_number_query,
+        },
     },
-    rpc,
+    rpc::EthereumRpcProvider,
 };
 
 #[derive(Debug)]
@@ -42,20 +44,26 @@ impl Default for BatchIndexConfig {
     }
 }
 
-pub struct BatchIndexer {
+pub struct BatchIndexer<T> {
     config: BatchIndexConfig,
     db: Arc<DbConnection>,
+    rpc_provider: Arc<T>,
     should_terminate: Arc<AtomicBool>,
 }
 
-impl BatchIndexer {
+impl<T> BatchIndexer<T>
+where
+    T: EthereumRpcProvider + Send + Sync + 'static,
+{
     pub async fn new(
         config: BatchIndexConfig,
         db: Arc<DbConnection>,
+        rpc_provider: Arc<T>,
         should_terminate: Arc<AtomicBool>,
-    ) -> BatchIndexer {
+    ) -> BatchIndexer<T> {
         Self {
             db,
+            rpc_provider,
             config,
             should_terminate,
         }
@@ -67,7 +75,7 @@ impl BatchIndexer {
         // Batch indexer loop. does the following until terminated:
         // 1. check if finished indexing (backfilling block is 0)
         // 2. check current starting block and backfilling block
-        // 3. if not fully indexed, index the block in batches (20 seems to be good for quick, but should be adjustable)
+        // 3. if not fully indexed, index the block in batches (20 seems to be good for batch, but should be adjustable)
         // 4. if it is fully indexed, do nothing (maybe we could exit this too?)
         while !self.should_terminate.load(Ordering::Relaxed) {
             let current_index_metadata = match get_index_metadata(self.db.clone()).await {
@@ -139,19 +147,21 @@ impl BatchIndexer {
             let timeout = self.config.rpc_timeout;
 
             let rpc_block_headers_futures: Vec<_> = block_range
-                .iter()
+                .clone()
+                .into_iter()
                 .map(|block_number| {
-                    if self.config.should_index_txs {
-                        task::spawn(rpc::get_full_block_by_number(
-                            *block_number,
-                            Some(timeout.into()),
-                        ))
-                    } else {
-                        task::spawn(rpc::get_full_block_only_by_number(
-                            *block_number,
-                            Some(timeout.into()),
-                        ))
-                    }
+                    let provider = self.rpc_provider.clone();
+                    let should_index_txs = self.config.should_index_txs;
+
+                    task::spawn(async move {
+                        provider
+                            .get_full_block_by_number(
+                                block_number,
+                                should_index_txs,
+                                Some(timeout.into()),
+                            )
+                            .await
+                    })
                 })
                 .collect();
 
@@ -190,6 +200,10 @@ impl BatchIndexer {
 
                 update_backfilling_block_number_query(&mut db_tx, starting_block).await?;
 
+                if starting_block == 0 {
+                    set_is_backfilling(&mut db_tx, false).await?;
+                }
+
                 // Commit at the end
                 db_tx.commit().await?;
 
@@ -214,26 +228,356 @@ impl BatchIndexer {
 
 #[cfg(test)]
 mod tests {
-    use std::env;
+    use crate::{
+        indexer::test_utils::MockRpcProvider,
+        repositories::{
+            block_header::{BlockHeaderDto, TransactionDto},
+            index_metadata::set_initial_indexing_status,
+        },
+        rpc::{BlockHeaderWithFullTransaction, RpcResponse},
+        utils::convert_hex_string_to_i64,
+    };
+    use sqlx::{pool::PoolOptions, ConnectOptions};
+    use tokio::{fs, time::sleep};
 
     use super::*;
 
-    fn get_test_db_connection() -> String {
-        env::var("TEST_DB_CONNECTION_STRING").unwrap()
+    async fn get_fixtures_for_tests() -> Vec<BlockHeaderWithFullTransaction> {
+        let mut block_fixtures = vec![];
+
+        for i in 0..=5 {
+            let json_string = fs::read_to_string(format!(
+                "tests/fixtures/indexer/eth_getBlockByNumber_sepolia_{}.json",
+                i
+            ))
+            .await
+            .unwrap();
+
+            let block =
+                serde_json::from_str::<RpcResponse<BlockHeaderWithFullTransaction>>(&json_string)
+                    .unwrap();
+            block_fixtures.push(block.result);
+        }
+
+        block_fixtures
     }
 
-    #[tokio::test]
-    async fn test_batch_indexer_new() {
+    #[sqlx::test]
+    async fn test_batch_indexer_new(
+        _pool_options: PoolOptions<sqlx::Postgres>,
+        connect_options: impl ConnectOptions,
+    ) {
         let config = BatchIndexConfig::default();
-        let url = get_test_db_connection();
+        let url = connect_options.to_url_lossy().to_string();
         let db = DbConnection::new(url).await.unwrap();
+        let mock_rpc = Arc::new(MockRpcProvider::new());
         let should_terminate = Arc::new(AtomicBool::new(false));
 
-        let indexer = BatchIndexer::new(config, db, should_terminate).await;
+        let indexer = BatchIndexer::new(config, db, mock_rpc, should_terminate).await;
 
         assert_eq!(indexer.config.max_retries, 10);
         assert_eq!(indexer.config.poll_interval, 10);
         assert_eq!(indexer.config.rpc_timeout, 300);
-        assert_eq!(indexer.config.index_batch_size, 20);
+        assert_eq!(indexer.config.index_batch_size, 50);
+        assert!(!indexer.config.should_index_txs);
+    }
+
+    #[sqlx::test]
+    async fn test_batch_index_default_headers_only(
+        _pool_options: PoolOptions<sqlx::Postgres>,
+        connect_options: impl ConnectOptions,
+    ) {
+        let block_fixtures = get_fixtures_for_tests().await;
+        let url = connect_options.to_url_lossy().to_string();
+
+        let config = BatchIndexConfig::default();
+        let db = DbConnection::new(url).await.unwrap();
+        let mock_rpc = Arc::new(MockRpcProvider::new_with_data(
+            vec![].into(),
+            vec![
+                block_fixtures[5].clone(),
+                block_fixtures[4].clone(),
+                block_fixtures[3].clone(),
+                block_fixtures[2].clone(),
+                block_fixtures[1].clone(),
+                block_fixtures[0].clone(),
+            ]
+            .into(),
+        ));
+        let should_terminate = Arc::new(AtomicBool::new(false));
+
+        // Set initial db state, setting to 5 as we want the indexer to start from 5.
+        set_initial_indexing_status(db.clone(), 5, 5, true)
+            .await
+            .unwrap();
+
+        let indexer =
+            BatchIndexer::new(config, db.clone(), mock_rpc, should_terminate.clone()).await;
+
+        task::spawn(async move {
+            indexer.index().await.unwrap();
+        });
+
+        // Wait until its indexed
+        sleep(Duration::from_secs(1)).await;
+        should_terminate.store(true, Ordering::Relaxed);
+
+        let metadata = get_index_metadata(db.clone()).await.unwrap().unwrap();
+        assert_eq!(metadata.backfilling_block_number, Some(0));
+        assert!(!metadata.is_backfilling);
+
+        // Since quick indexes from the latest, it should only index up to 5.
+        // Check if the block is indexed correctly.
+        let result: Result<Vec<BlockHeaderDto>, sqlx::Error> =
+            sqlx::query_as("SELECT * FROM blockheaders order by number asc")
+                .fetch_all(&mut *db.pool.acquire().await.unwrap())
+                .await;
+        assert!(result.is_ok());
+
+        let result = result.unwrap();
+        assert_eq!(result.len(), block_fixtures.len());
+        // If the block is indexed correctly, the hash should match.
+        assert_eq!(result[0].block_hash, block_fixtures[0].hash);
+        assert_eq!(result[1].block_hash, block_fixtures[1].hash);
+        assert_eq!(result[2].block_hash, block_fixtures[2].hash);
+        assert_eq!(result[3].block_hash, block_fixtures[3].hash);
+        assert_eq!(result[4].block_hash, block_fixtures[4].hash);
+        assert_eq!(result[5].block_hash, block_fixtures[5].hash);
+
+        // Check if the transactions are not indexed.
+        let tx_result: Result<Vec<TransactionDto>, sqlx::Error> =
+            sqlx::query_as("SELECT * FROM transactions")
+                .fetch_all(&mut *db.pool.acquire().await.unwrap())
+                .await;
+        assert!(tx_result.is_ok());
+        assert!(tx_result.unwrap().is_empty());
+    }
+
+    #[sqlx::test]
+    async fn test_batch_index_with_tx(
+        _pool_options: PoolOptions<sqlx::Postgres>,
+        connect_options: impl ConnectOptions,
+    ) {
+        let block_fixtures = get_fixtures_for_tests().await;
+        let url = connect_options.to_url_lossy().to_string();
+
+        let config = BatchIndexConfig {
+            should_index_txs: true,
+            ..BatchIndexConfig::default()
+        };
+        let db = DbConnection::new(url).await.unwrap();
+        let mock_rpc = Arc::new(MockRpcProvider::new_with_data(
+            vec![].into(),
+            vec![
+                block_fixtures[5].clone(),
+                block_fixtures[4].clone(),
+                block_fixtures[3].clone(),
+                block_fixtures[2].clone(),
+                block_fixtures[1].clone(),
+                block_fixtures[0].clone(),
+            ]
+            .into(),
+        ));
+        let should_terminate = Arc::new(AtomicBool::new(false));
+
+        // Set initial db state, setting to 5 as we want the indexer to start from 5.
+        set_initial_indexing_status(db.clone(), 5, 5, true)
+            .await
+            .unwrap();
+
+        let indexer =
+            BatchIndexer::new(config, db.clone(), mock_rpc, should_terminate.clone()).await;
+
+        task::spawn(async move {
+            indexer.index().await.unwrap();
+        });
+
+        // Wait until its indexed
+        sleep(Duration::from_secs(1)).await;
+        should_terminate.store(true, Ordering::Relaxed);
+
+        let metadata = get_index_metadata(db.clone()).await.unwrap().unwrap();
+        assert_eq!(metadata.backfilling_block_number, Some(0));
+        assert!(!metadata.is_backfilling);
+
+        // Since quick indexes from the latest, it should only index up to 5.
+        // Check if the block is indexed correctly.
+        let result: Result<Vec<BlockHeaderDto>, sqlx::Error> =
+            sqlx::query_as("SELECT * FROM blockheaders order by number asc")
+                .fetch_all(&mut *db.pool.acquire().await.unwrap())
+                .await;
+        assert!(result.is_ok());
+
+        let result = result.unwrap();
+        assert_eq!(result.len(), block_fixtures.len());
+        // If the block is indexed correctly, the hash should match.
+        assert_eq!(result[0].block_hash, block_fixtures[0].hash);
+        assert_eq!(result[1].block_hash, block_fixtures[1].hash);
+        assert_eq!(result[2].block_hash, block_fixtures[2].hash);
+        assert_eq!(result[3].block_hash, block_fixtures[3].hash);
+        assert_eq!(result[4].block_hash, block_fixtures[4].hash);
+        assert_eq!(result[5].block_hash, block_fixtures[5].hash);
+
+        // Check if the transactions are indexed correctly.
+        for block_fixture in &block_fixtures {
+            let tx_result: Result<Vec<TransactionDto>, sqlx::Error> =
+                sqlx::query_as("SELECT * FROM transactions WHERE block_number = $1")
+                    .bind(convert_hex_string_to_i64(&block_fixture.number).unwrap())
+                    .fetch_all(&mut *db.pool.acquire().await.unwrap())
+                    .await;
+            assert!(tx_result.is_ok());
+
+            let tx_result = tx_result.unwrap();
+            assert_eq!(tx_result.len(), block_fixture.transactions.len());
+            for (j, tx) in tx_result.iter().enumerate() {
+                assert_eq!(
+                    tx.block_number,
+                    convert_hex_string_to_i64(&block_fixture.number).unwrap()
+                );
+                assert_eq!(tx.transaction_hash, block_fixture.transactions[j].hash);
+            }
+        }
+    }
+
+    #[sqlx::test]
+    async fn test_quick_index_always_index_away_from_latest_blocknumber_with_tx(
+        _pool_options: PoolOptions<sqlx::Postgres>,
+        connect_options: impl ConnectOptions,
+    ) {
+        let block_fixtures = get_fixtures_for_tests().await;
+        let url = connect_options.to_url_lossy().to_string();
+
+        let config = BatchIndexConfig {
+            should_index_txs: true,
+            ..BatchIndexConfig::default()
+        };
+        let db = DbConnection::new(url).await.unwrap();
+        let should_terminate = Arc::new(AtomicBool::new(false));
+
+        // In this case let's simulate that the latest block number starts from 3 instead.
+        let mock_rpc = Arc::new(MockRpcProvider::new_with_data(
+            vec![].into(),
+            vec![
+                block_fixtures[3].clone(),
+                block_fixtures[2].clone(),
+                block_fixtures[1].clone(),
+                block_fixtures[0].clone(),
+            ]
+            .into(),
+        ));
+
+        // Set initial db state, setting to 3 as we want the indexer to start from 3.
+        set_initial_indexing_status(db.clone(), 3, 3, true)
+            .await
+            .unwrap();
+
+        let indexer =
+            BatchIndexer::new(config, db.clone(), mock_rpc, should_terminate.clone()).await;
+
+        task::spawn(async move {
+            indexer.index().await.unwrap();
+        });
+
+        // Wait until its indexed
+        sleep(Duration::from_secs(1)).await;
+        should_terminate.store(true, Ordering::Relaxed);
+
+        let metadata = get_index_metadata(db.clone()).await.unwrap().unwrap();
+        assert_eq!(metadata.backfilling_block_number, Some(0));
+        assert!(!metadata.is_backfilling);
+
+        // Since quick indexes from the latest, it should only index up to 5.
+        // Check if the block is indexed correctly.
+        let result: Result<Vec<BlockHeaderDto>, sqlx::Error> =
+            sqlx::query_as("SELECT * FROM blockheaders order by number asc")
+                .fetch_all(&mut *db.pool.acquire().await.unwrap())
+                .await;
+        assert!(result.is_ok());
+
+        let result = result.unwrap();
+        assert_eq!(result.len(), 4);
+        // If the block is indexed correctly, the hash should match.
+        assert_eq!(result[0].block_hash, block_fixtures[0].hash);
+        assert_eq!(result[1].block_hash, block_fixtures[1].hash);
+        assert_eq!(result[2].block_hash, block_fixtures[2].hash);
+        assert_eq!(result[3].block_hash, block_fixtures[3].hash);
+
+        // Check if the transactions are indexed correctly.
+        for block_fixture in &block_fixtures[0..=3] {
+            let tx_result: Result<Vec<TransactionDto>, sqlx::Error> =
+                sqlx::query_as("SELECT * FROM transactions WHERE block_number = $1")
+                    .bind(convert_hex_string_to_i64(&block_fixture.number).unwrap())
+                    .fetch_all(&mut *db.pool.acquire().await.unwrap())
+                    .await;
+            assert!(tx_result.is_ok());
+
+            let tx_result = tx_result.unwrap();
+            assert_eq!(tx_result.len(), block_fixture.transactions.len());
+            for (j, tx) in tx_result.iter().enumerate() {
+                assert_eq!(
+                    tx.block_number,
+                    convert_hex_string_to_i64(&block_fixture.number).unwrap()
+                );
+                assert_eq!(tx.transaction_hash, block_fixture.transactions[j].hash);
+            }
+        }
+    }
+
+    #[sqlx::test]
+    async fn test_failed_to_get_index_metadata(
+        _pool_options: PoolOptions<sqlx::Postgres>,
+        connect_options: impl ConnectOptions,
+    ) {
+        let config = BatchIndexConfig::default();
+        let url = connect_options.to_url_lossy().to_string();
+
+        let db = DbConnection::new(url).await.unwrap();
+        let mock_rpc = Arc::new(MockRpcProvider::new());
+        let should_terminate = Arc::new(AtomicBool::new(false));
+
+        // The metadata table would not exist without initializing it.
+        let indexer =
+            BatchIndexer::new(config, db.clone(), mock_rpc, should_terminate.clone()).await;
+
+        let result = indexer.index().await;
+        assert!(result.is_err());
+        assert_eq!(
+            result.unwrap_err().to_string(),
+            "Error getting index metadata: metadata not found."
+        );
+    }
+
+    #[sqlx::test]
+    async fn test_should_retry_when_rpc_error_happens(
+        _pool_options: PoolOptions<sqlx::Postgres>,
+        connect_options: impl ConnectOptions,
+    ) {
+        let url = connect_options.to_url_lossy().to_string();
+
+        // Reduce the max tries to 2 to speed up the test.
+        let config = BatchIndexConfig {
+            max_retries: 2,
+            ..BatchIndexConfig::default()
+        };
+        let db = DbConnection::new(url).await.unwrap();
+
+        // Empty the rpc response for get_block_by_number, so it will attempt to retry
+        let mock_rpc = Arc::new(MockRpcProvider::new_with_data(vec![].into(), vec![].into()));
+        let should_terminate = Arc::new(AtomicBool::new(false));
+
+        // Set initial db state, setting to 4 as we want the indexer to start from 5.
+        set_initial_indexing_status(db.clone(), 4, 4, true)
+            .await
+            .unwrap();
+
+        let indexer =
+            BatchIndexer::new(config, db.clone(), mock_rpc, should_terminate.clone()).await;
+
+        let result = indexer.index().await;
+        assert!(result.is_err());
+        assert_eq!(
+            result.unwrap_err().to_string(),
+            "Max retries reached. Stopping batch indexing."
+        );
     }
 }

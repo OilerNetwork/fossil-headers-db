@@ -368,7 +368,7 @@ mod tests {
     use super::*;
 
     fn get_test_db_connection() -> String {
-        env::var("TEST_DB_CONNECTION_STRING").unwrap()
+        env::var("DATABASE_URL").unwrap()
     }
 
     fn assert_block_header_eq(header1: BlockHeaderDto, header2: BlockHeaderDto) {

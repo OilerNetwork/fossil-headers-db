@@ -51,9 +51,11 @@ pub async fn get_index_metadata(db: Arc<DbConnection>) -> Result<Option<IndexMet
 }
 
 #[allow(dead_code)]
-pub async fn set_is_backfilling(db: Arc<DbConnection>, is_backfilling: bool) -> Result<()> {
-    let db = db.as_ref();
-    let result = sqlx::query(
+pub async fn set_is_backfilling(
+    db_tx: &mut sqlx::Transaction<'_, Postgres>,
+    is_backfilling: bool,
+) -> Result<()> {
+    sqlx::query(
         r#"
             UPDATE index_metadata
             SET is_backfilling = $1,
@@ -61,16 +63,8 @@ pub async fn set_is_backfilling(db: Arc<DbConnection>, is_backfilling: bool) -> 
             "#,
     )
     .bind(is_backfilling)
-    .execute(&db.pool)
+    .execute(&mut **db_tx)
     .await?;
-
-    if result.rows_affected() != 1 {
-        error!(
-            "Failed to set is_backfilling, affecting {} rows",
-            result.rows_affected()
-        );
-        return Err(anyhow!("Failed to set is_backfilling"));
-    }
 
     Ok(())
 }
@@ -196,7 +190,7 @@ mod tests {
     // Ideally, we should allow tx or db, however the executor trait is tricky to utilize
 
     fn get_test_db_connection() -> String {
-        env::var("TEST_DB_CONNECTION_STRING").unwrap()
+        env::var("DATABASE_URL").unwrap()
     }
 
     #[tokio::test]
@@ -283,6 +277,48 @@ mod tests {
 
         assert!(result.is_ok());
         assert_eq!(result.unwrap().backfilling_block_number.unwrap(), 100000);
+
+        tx.rollback().await.unwrap();
+    }
+
+    #[tokio::test]
+    async fn test_set_is_backfilling() {
+        let url = get_test_db_connection();
+        let db = DbConnection::new(url).await.unwrap();
+        let mut tx = db.pool.begin().await.unwrap();
+
+        sqlx::query(
+            "INSERT INTO index_metadata (
+                current_latest_block_number,
+                indexing_starting_block_number,
+                is_backfilling
+            ) VALUES (
+                123123,
+                0,
+                false
+            )",
+        )
+        .execute(&mut *tx)
+        .await
+        .unwrap();
+
+        let result: Result<IndexMetadataDto, sqlx::Error> =
+            sqlx::query_as("SELECT * FROM index_metadata")
+                .fetch_one(&mut *tx)
+                .await;
+
+        assert!(result.is_ok());
+        assert!(!result.unwrap().is_backfilling);
+
+        set_is_backfilling(&mut tx, true).await.unwrap();
+
+        let result: Result<IndexMetadataDto, sqlx::Error> =
+            sqlx::query_as("SELECT * FROM index_metadata")
+                .fetch_one(&mut *tx)
+                .await;
+
+        assert!(result.is_ok());
+        assert!(result.unwrap().is_backfilling);
 
         tx.rollback().await.unwrap();
     }

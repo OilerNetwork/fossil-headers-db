@@ -1,6 +1,9 @@
 pub mod batch_service;
 pub mod quick_service;
 
+#[cfg(test)]
+pub mod test_utils;
+
 // TODO
 // [x] 1. start a 'job' and add the job info to the job table, including statuses, etc
 // [x] 2. spin up multiple of that job
