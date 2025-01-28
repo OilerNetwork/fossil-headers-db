@@ -16,7 +16,6 @@ use tracing::{error, info, warn};
 static DB_POOL: OnceCell<Arc<Pool<Postgres>>> = OnceCell::const_new();
 pub const DB_MAX_CONNECTIONS: u32 = 50;
 
-// TODO: Not use a oncecell but instead use some sort of DI for easier testing.
 pub async fn get_db_pool() -> Result<Arc<Pool<Postgres>>> {
     if let Some(pool) = DB_POOL.get() {
         Ok(pool.clone())
@@ -228,7 +227,6 @@ pub async fn write_blockheader(block_header: BlockHeaderWithFullTransaction) -> 
 
     // Insert transactions
     if !block_header.transactions.is_empty() {
-        // TODO: probably need a on conflict clause here too.
         let mut query_builder: QueryBuilder<Postgres> = QueryBuilder::new(
             "INSERT INTO transactions (
                 block_number, transaction_hash, transaction_index,

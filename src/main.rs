@@ -44,7 +44,6 @@ enum Mode {
 
 #[tokio::main]
 async fn main() -> Result<()> {
-    // TODO: Load environment variables if its dev mode
     dotenvy::dotenv().ok();
 
     // Initialize tracing subscriber

@@ -886,7 +886,6 @@ dependencies = [
  "serde_json",
  "serial_test",
  "sqlx",
- "testcontainers",
  "testcontainers-modules",
  "tokio",
  "tracing",
