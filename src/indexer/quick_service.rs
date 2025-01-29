@@ -6,7 +6,7 @@ use std::{
     time::Duration,
 };
 
-use eyre::{anyhow, Result};
+use eyre::{eyre, Result};
 use futures::future::try_join_all;
 use tokio::task;
 use tracing::{error, info, warn};
@@ -79,7 +79,7 @@ where
                         metadata.current_latest_block_number
                     } else {
                         error!("[quick_index] Error getting index metadata");
-                        return Err(anyhow!("Error getting index metadata: metadata not found."));
+                        return Err(eyre!("Error getting index metadata: metadata not found."));
                     }
                 }
                 Err(e) => {
@@ -182,11 +182,7 @@ where
                 if self.config.should_index_txs {
                     insert_block_header_query(&mut db_tx, block_headers).await?;
                 } else {
-                    insert_block_header_only_query(
-                        &mut db_tx,
-                        block_headers.iter().map(|h| h.clone().into()).collect(),
-                    )
-                    .await?;
+                    insert_block_header_only_query(&mut db_tx, block_headers).await?;
                 }
 
                 update_latest_quick_index_block_number_query(&mut db_tx, ending_block).await?;
@@ -209,7 +205,7 @@ where
             tokio::time::sleep(Duration::from_secs(backoff)).await;
         }
 
-        Err(anyhow!("Max retries reached. Stopping quick indexing."))
+        Err(eyre!("Max retries reached. Stopping quick indexing."))
     }
 }
 
@@ -221,7 +217,7 @@ mod tests {
             block_header::{BlockHeaderDto, TransactionDto},
             index_metadata::set_initial_indexing_status,
         },
-        rpc::{BlockHeaderWithFullTransaction, RpcResponse},
+        rpc::{BlockHeader, RpcResponse, Transaction},
         utils::convert_hex_string_to_i64,
     };
     use sqlx::{pool::PoolOptions, ConnectOptions};
@@ -229,7 +225,7 @@ mod tests {
 
     use super::*;
 
-    async fn get_fixtures_for_tests() -> Vec<BlockHeaderWithFullTransaction> {
+    async fn get_fixtures_for_tests() -> Vec<BlockHeader> {
         let mut block_fixtures = vec![];
 
         for i in 0..=5 {
@@ -240,9 +236,7 @@ mod tests {
             .await
             .unwrap();
 
-            let block =
-                serde_json::from_str::<RpcResponse<BlockHeaderWithFullTransaction>>(&json_string)
-                    .unwrap();
+            let block = serde_json::from_str::<RpcResponse<BlockHeader>>(&json_string).unwrap();
             block_fixtures.push(block.result);
         }
 
@@ -391,7 +385,12 @@ mod tests {
                 tx.block_number,
                 convert_hex_string_to_i64(&block_fixtures[5].number).unwrap()
             );
-            assert_eq!(tx.transaction_hash, block_fixtures[5].transactions[i].hash);
+
+            let fixtures_tx: Transaction = block_fixtures[5].transactions[i]
+                .clone()
+                .try_into()
+                .unwrap();
+            assert_eq!(tx.transaction_hash, fixtures_tx.hash);
         }
     }
 
@@ -472,7 +471,11 @@ mod tests {
                 tx.block_number,
                 convert_hex_string_to_i64(&block_fixtures[4].number).unwrap()
             );
-            assert_eq!(tx.transaction_hash, block_fixtures[4].transactions[i].hash);
+            let fixtures_tx: Transaction = block_fixtures[4].transactions[i]
+                .clone()
+                .try_into()
+                .unwrap();
+            assert_eq!(tx.transaction_hash, fixtures_tx.hash);
         }
 
         let block_5_result = block_5_result.unwrap();
@@ -482,7 +485,11 @@ mod tests {
                 tx.block_number,
                 convert_hex_string_to_i64(&block_fixtures[5].number).unwrap()
             );
-            assert_eq!(tx.transaction_hash, block_fixtures[5].transactions[i].hash);
+            let fixtures_tx: Transaction = block_fixtures[5].transactions[i]
+                .clone()
+                .try_into()
+                .unwrap();
+            assert_eq!(tx.transaction_hash, fixtures_tx.hash);
         }
     }
 

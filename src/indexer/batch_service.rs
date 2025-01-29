@@ -6,7 +6,7 @@ use std::{
     time::Duration,
 };
 
-use eyre::{anyhow, Result};
+use eyre::{eyre, Result};
 use futures::future::try_join_all;
 use tokio::task;
 use tracing::{error, info, warn};
@@ -84,7 +84,7 @@ where
                         metadata
                     } else {
                         error!("[batch_index] Error getting index metadata");
-                        return Err(anyhow!("Error getting index metadata: metadata not found."));
+                        return Err(eyre!("Error getting index metadata: metadata not found."));
                     }
                 }
                 Err(e) => {
@@ -191,11 +191,7 @@ where
                 if self.config.should_index_txs {
                     insert_block_header_query(&mut db_tx, block_headers).await?;
                 } else {
-                    insert_block_header_only_query(
-                        &mut db_tx,
-                        block_headers.iter().map(|h| h.clone().into()).collect(),
-                    )
-                    .await?;
+                    insert_block_header_only_query(&mut db_tx, block_headers).await?;
                 }
 
                 update_backfilling_block_number_query(&mut db_tx, starting_block).await?;
@@ -222,7 +218,7 @@ where
             tokio::time::sleep(Duration::from_secs(backoff)).await;
         }
 
-        Err(anyhow!("Max retries reached. Stopping batch indexing."))
+        Err(eyre!("Max retries reached. Stopping batch indexing."))
     }
 }
 
@@ -234,7 +230,7 @@ mod tests {
             block_header::{BlockHeaderDto, TransactionDto},
             index_metadata::set_initial_indexing_status,
         },
-        rpc::{BlockHeaderWithFullTransaction, RpcResponse},
+        rpc::{BlockHeader, RpcResponse, Transaction},
         utils::convert_hex_string_to_i64,
     };
     use sqlx::{pool::PoolOptions, ConnectOptions};
@@ -242,7 +238,7 @@ mod tests {
 
     use super::*;
 
-    async fn get_fixtures_for_tests() -> Vec<BlockHeaderWithFullTransaction> {
+    async fn get_fixtures_for_tests() -> Vec<BlockHeader> {
         let mut block_fixtures = vec![];
 
         for i in 0..=5 {
@@ -253,9 +249,7 @@ mod tests {
             .await
             .unwrap();
 
-            let block =
-                serde_json::from_str::<RpcResponse<BlockHeaderWithFullTransaction>>(&json_string)
-                    .unwrap();
+            let block = serde_json::from_str::<RpcResponse<BlockHeader>>(&json_string).unwrap();
             block_fixtures.push(block.result);
         }
 
@@ -434,7 +428,9 @@ mod tests {
                     tx.block_number,
                     convert_hex_string_to_i64(&block_fixture.number).unwrap()
                 );
-                assert_eq!(tx.transaction_hash, block_fixture.transactions[j].hash);
+                let fixtures_tx: Transaction =
+                    block_fixture.transactions[j].clone().try_into().unwrap();
+                assert_eq!(tx.transaction_hash, fixtures_tx.hash);
             }
         }
     }
@@ -518,7 +514,9 @@ mod tests {
                     tx.block_number,
                     convert_hex_string_to_i64(&block_fixture.number).unwrap()
                 );
-                assert_eq!(tx.transaction_hash, block_fixture.transactions[j].hash);
+                let fixtures_tx: Transaction =
+                    block_fixture.transactions[j].clone().try_into().unwrap();
+                assert_eq!(tx.transaction_hash, fixtures_tx.hash);
             }
         }
     }

@@ -1,5 +1,4 @@
 use std::{
-    env,
     sync::{atomic::AtomicBool, Arc},
     thread::{self, JoinHandle},
 };
@@ -14,35 +13,42 @@ use crate::{
         get_index_metadata, set_initial_indexing_status, IndexMetadataDto,
     },
     router,
-    rpc::{self, EthereumJsonRpcClient},
+    rpc::{EthereumJsonRpcClient, EthereumRpcProvider},
 };
-use eyre::{anyhow, Context, Result};
+use eyre::{eyre, Result};
 use tracing::{error, info};
-use tracing_subscriber::fmt;
 
-pub async fn start_indexing_services(should_terminate: Arc<AtomicBool>) -> Result<()> {
-    let db_conn_string =
-        env::var("DB_CONNECTION_STRING").context("DB_CONNECTION_STRING must be set")?;
-    let connection_string =
-        env::var("NODE_CONNECTION_STRING").context("NODE_CONNECTION_STRING not set")?;
+#[derive(Debug)]
+pub struct IndexingConfig {
+    pub db_conn_string: String,
+    pub node_conn_string: String,
+    pub should_index_txs: bool,
+    pub max_retries: u8,
+    pub poll_interval: u32,
+    pub rpc_timeout: u32,
+    pub rpc_max_retries: u32,
+    pub index_batch_size: u32,
+}
 
-    let should_index_txs = env::var("INDEX_TRANSACTIONS")
-        .unwrap_or_else(|_| "false".to_string())
-        .parse::<bool>()
-        .context("INDEX_TRANSACTIONS must be set")?;
-
-    // Initialize tracing subscriber
-    fmt().init();
-
+pub async fn start_indexing_services(
+    indexing_config: IndexingConfig,
+    should_terminate: Arc<AtomicBool>,
+) -> Result<()> {
     // Setup database connection
     info!("Connecting to DB");
-    let db = DbConnection::new(db_conn_string).await?;
+    let db = DbConnection::new(indexing_config.db_conn_string).await?;
 
-    let rpc_client = Arc::new(EthereumJsonRpcClient::new(connection_string, 5));
+    let rpc_client = Arc::new(EthereumJsonRpcClient::new(
+        indexing_config.node_conn_string,
+        indexing_config.rpc_max_retries,
+    ));
+
+    info!("Run migrations");
+    sqlx::migrate!().run(&db.pool).await?;
 
     info!("Starting Indexer");
     // Start by checking and updating the current status in the db.
-    initialize_index_metadata(db.clone()).await?;
+    initialize_index_metadata(db.clone(), rpc_client.clone()).await?;
     let router_terminator = Arc::clone(&should_terminate);
 
     // Setup the router which allows us to query health status and operations
@@ -63,9 +69,11 @@ pub async fn start_indexing_services(should_terminate: Arc<AtomicBool>) -> Resul
     // Start the quick indexer
     let quick_indexer = QuickIndexer::new(
         QuickIndexConfig {
-            should_index_txs,
-            index_batch_size: 100, // larger size since we are not indexing txs
-            ..Default::default()
+            should_index_txs: indexing_config.should_index_txs,
+            index_batch_size: indexing_config.index_batch_size,
+            max_retries: indexing_config.max_retries,
+            poll_interval: indexing_config.poll_interval,
+            rpc_timeout: indexing_config.rpc_timeout,
         },
         db.clone(),
         rpc_client.clone(),
@@ -88,9 +96,11 @@ pub async fn start_indexing_services(should_terminate: Arc<AtomicBool>) -> Resul
     // Start the batch indexer
     let batch_indexer = BatchIndexer::new(
         BatchIndexConfig {
-            should_index_txs,
-            index_batch_size: 100, // larger size since we are not indexing txs
-            ..Default::default()
+            should_index_txs: indexing_config.should_index_txs,
+            index_batch_size: indexing_config.index_batch_size,
+            max_retries: indexing_config.max_retries,
+            poll_interval: indexing_config.poll_interval,
+            rpc_timeout: indexing_config.rpc_timeout,
         },
         db.clone(),
         rpc_client.clone(),
@@ -120,13 +130,16 @@ pub async fn start_indexing_services(should_terminate: Arc<AtomicBool>) -> Resul
     Ok(())
 }
 
-async fn initialize_index_metadata(db: Arc<DbConnection>) -> Result<IndexMetadataDto> {
+async fn initialize_index_metadata(
+    db: Arc<DbConnection>,
+    rpc_client: Arc<EthereumJsonRpcClient>,
+) -> Result<IndexMetadataDto> {
     if let Some(metadata) = get_index_metadata(db.clone()).await? {
         return Ok(metadata);
     }
 
     // Set current latest block number to the latest block number - 1 to make sure we don't miss the new blocks
-    let latest_block_number = rpc::get_latest_finalized_blocknumber(None).await? - 1;
+    let latest_block_number = rpc_client.get_latest_finalized_blocknumber(None).await? - 1;
 
     set_initial_indexing_status(db.clone(), latest_block_number, latest_block_number, true).await?;
 
@@ -134,7 +147,7 @@ async fn initialize_index_metadata(db: Arc<DbConnection>) -> Result<IndexMetadat
         return Ok(metadata);
     }
 
-    Err(anyhow!("Failed to get indexer metadata"))
+    Err(eyre!("Failed to get indexer metadata"))
 }
 
 fn wait_for_thread_completion(handles: Vec<JoinHandle<Result<()>>>) -> Result<()> {

@@ -1,4 +1,4 @@
-use eyre::{anyhow, Report, Result};
+use eyre::{eyre, Report, Result};
 use serde::Deserialize;
 use sqlx::Postgres;
 use std::sync::Arc;
@@ -104,9 +104,7 @@ pub async fn set_initial_indexing_status(
 
         if result.rows_affected() != 1 {
             error!("Failed to update initial indexing status");
-            return Err(anyhow!(
-                "Failed to update initial indexing status".to_owned(),
-            ));
+            return Err(eyre!("Failed to update initial indexing status".to_owned(),));
         }
 
         return Ok(());
@@ -133,9 +131,7 @@ pub async fn set_initial_indexing_status(
 
     if result.rows_affected() != 1 {
         error!("Failed to insert initial indexing status");
-        return Err(anyhow!(
-            "Failed to insert initial indexing status".to_owned(),
-        ));
+        return Err(eyre!("Failed to insert initial indexing status".to_owned(),));
     }
 
     Ok(())

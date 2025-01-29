@@ -2,7 +2,7 @@ use eyre::{ContextCompat, Result};
 use sqlx::{query_builder::Separated, Postgres, QueryBuilder};
 
 use crate::{
-    rpc::{BlockHeaderWithEmptyTransaction, BlockHeaderWithFullTransaction, Transaction},
+    rpc::{try_convert_full_tx_vector, BlockHeader, Transaction},
     utils::{convert_hex_string_to_i32, convert_hex_string_to_i64},
 };
 
@@ -51,9 +51,7 @@ pub struct BlockHeaderDto {
 }
 
 #[allow(dead_code)]
-fn convert_rpc_blockheader_to_dto(
-    block_header: BlockHeaderWithEmptyTransaction,
-) -> Result<BlockHeaderDto> {
+fn convert_rpc_blockheader_to_dto(block_header: BlockHeader) -> Result<BlockHeaderDto> {
     // These fields should be converted successfully, and if its not converted successfully,
     // it should be considered an unintended bug.
     let block_number = convert_hex_string_to_i64(&block_header.number)?;
@@ -130,17 +128,19 @@ fn convert_rpc_transaction_to_dto(transaction: Transaction) -> Result<Transactio
 // Using transaction with multi row inserts seem to be the fastest
 pub async fn insert_block_header_query(
     db_tx: &mut sqlx::Transaction<'_, Postgres>,
-    block_headers: Vec<BlockHeaderWithFullTransaction>,
+    block_headers: Vec<BlockHeader>,
 ) -> Result<()> {
     let mut formatted_block_headers: Vec<BlockHeaderDto> = Vec::with_capacity(block_headers.len());
     let mut flattened_transactions = Vec::new();
 
     for header in block_headers.iter() {
-        let dto = convert_rpc_blockheader_to_dto(header.clone().into())?;
+        let dto = convert_rpc_blockheader_to_dto(header.clone())?;
         formatted_block_headers.push(dto);
 
         // Collect the transactions here and get the queries.
-        flattened_transactions.extend(header.transactions.clone());
+        // Here we assume that its a full transaction that is received
+        let txs = try_convert_full_tx_vector(header.transactions.clone())?;
+        flattened_transactions.extend(txs);
     }
 
     let mut query_builder: QueryBuilder<Postgres> = QueryBuilder::new(
@@ -277,7 +277,7 @@ async fn insert_block_txs_query(
 #[allow(dead_code)]
 pub async fn insert_block_header_only_query(
     db_tx: &mut sqlx::Transaction<'_, Postgres>,
-    block_headers: Vec<BlockHeaderWithEmptyTransaction>,
+    block_headers: Vec<BlockHeader>,
 ) -> Result<()> {
     let mut formatted_block_headers: Vec<BlockHeaderDto> = Vec::with_capacity(block_headers.len());
 
@@ -419,7 +419,7 @@ mod tests {
         assert_eq!(transaction1.chain_id, transaction2.chain_id);
     }
 
-    async fn get_fixtures_for_tests() -> Vec<BlockHeaderWithFullTransaction> {
+    async fn get_fixtures_for_tests() -> Vec<BlockHeader> {
         let block_21598014 =
             fs::read_to_string("tests/fixtures/eth_getBlockByNumber_21598014.json")
                 .await
@@ -430,11 +430,9 @@ mod tests {
                 .unwrap();
 
         let block_21598014_response =
-            serde_json::from_str::<RpcResponse<BlockHeaderWithFullTransaction>>(&block_21598014)
-                .unwrap();
+            serde_json::from_str::<RpcResponse<BlockHeader>>(&block_21598014).unwrap();
         let block_21598015_response =
-            serde_json::from_str::<RpcResponse<BlockHeaderWithFullTransaction>>(&block_21598015)
-                .unwrap();
+            serde_json::from_str::<RpcResponse<BlockHeader>>(&block_21598015).unwrap();
 
         vec![
             block_21598014_response.result,
@@ -464,7 +462,7 @@ mod tests {
         assert!(result.is_ok());
 
         let block_header_to_compare =
-            convert_rpc_blockheader_to_dto(block_headers[0].clone().into()).unwrap();
+            convert_rpc_blockheader_to_dto(block_headers[0].clone()).unwrap();
         let block_header_in_db = result.unwrap();
 
         assert_block_header_eq(block_header_in_db, block_header_to_compare);
@@ -494,7 +492,7 @@ mod tests {
         assert!(result.is_ok());
 
         let block_header_to_compare =
-            convert_rpc_blockheader_to_dto(block_headers[0].clone().into()).unwrap();
+            convert_rpc_blockheader_to_dto(block_headers[0].clone()).unwrap();
         let block_header_in_db = result.unwrap();
         assert_block_header_eq(block_header_in_db, block_header_to_compare);
 
@@ -507,7 +505,7 @@ mod tests {
         assert!(result.is_ok());
 
         let block_header_to_compare =
-            convert_rpc_blockheader_to_dto(block_headers[1].clone().into()).unwrap();
+            convert_rpc_blockheader_to_dto(block_headers[1].clone()).unwrap();
         let block_header_in_db = result.unwrap();
         assert_block_header_eq(block_header_in_db, block_header_to_compare);
 
@@ -524,7 +522,7 @@ mod tests {
         // Insert the block header
         let mut tx = db.pool.begin().await.unwrap();
         let block_header = block_headers[0].clone();
-        let block_header = BlockHeaderWithFullTransaction {
+        let block_header = BlockHeader {
             number: "0xg".to_string(),
             ..block_header
         };
@@ -550,7 +548,7 @@ mod tests {
 
         // Insert the block header again
         let same_block_header_with_diff_values = block_headers[0].clone();
-        let same_block_header_with_diff_values = BlockHeaderWithFullTransaction {
+        let same_block_header_with_diff_values = BlockHeader {
             gas_limit: "0x1".to_string(),
             ..same_block_header_with_diff_values
         };
@@ -567,8 +565,7 @@ mod tests {
                 .await;
         assert!(result.is_ok());
         let block_header_to_compare =
-            convert_rpc_blockheader_to_dto(same_block_header_with_diff_values.clone().into())
-                .unwrap();
+            convert_rpc_blockheader_to_dto(same_block_header_with_diff_values.clone()).unwrap();
         let block_header_in_db = result.unwrap();
         assert_block_header_eq(block_header_in_db, block_header_to_compare);
 
@@ -585,7 +582,7 @@ mod tests {
         let mut tx = db.pool.begin().await.unwrap();
 
         // Insert the transactions
-        let transaction = block_headers[0].transactions[0].clone();
+        let transaction: Transaction = block_headers[0].transactions[0].clone().try_into().unwrap();
         insert_block_txs_query(&mut tx, vec![transaction.clone()])
             .await
             .unwrap();
@@ -615,8 +612,10 @@ mod tests {
         let mut tx = db.pool.begin().await.unwrap();
 
         // Insert the transactions
-        let transaction_1 = block_headers[0].transactions[0].clone();
-        let transaction_2 = block_headers[0].transactions[1].clone();
+        let transaction_1: Transaction =
+            block_headers[0].transactions[0].clone().try_into().unwrap();
+        let transaction_2: Transaction =
+            block_headers[0].transactions[1].clone().try_into().unwrap();
 
         insert_block_txs_query(&mut tx, vec![transaction_1.clone(), transaction_2.clone()])
             .await
@@ -658,7 +657,7 @@ mod tests {
         let mut tx = db.pool.begin().await.unwrap();
 
         // Insert the transactions
-        let transaction = block_headers[0].transactions[0].clone();
+        let transaction = block_headers[0].transactions[0].clone().try_into().unwrap();
         let transaction = Transaction {
             block_number: "0xg".to_string(),
             ..transaction
@@ -679,13 +678,14 @@ mod tests {
         let mut tx = db.pool.begin().await.unwrap();
 
         // Insert the transactions
-        let transaction = block_headers[0].transactions[0].clone();
+        let transaction: Transaction = block_headers[0].transactions[0].clone().try_into().unwrap();
         insert_block_txs_query(&mut tx, vec![transaction.clone()])
             .await
             .unwrap();
 
         // Insert the transactions again
-        let same_transaction_with_diff_values = block_headers[0].transactions[0].clone();
+        let same_transaction_with_diff_values: Transaction =
+            block_headers[0].transactions[0].clone().try_into().unwrap();
         let same_transaction_with_diff_values = Transaction {
             value: "0x1".to_string(),
             ..same_transaction_with_diff_values
@@ -718,7 +718,7 @@ mod tests {
 
         // Insert the block header
         let mut tx = db.pool.begin().await.unwrap();
-        insert_block_header_only_query(&mut tx, vec![block_headers[0].clone().into()])
+        insert_block_header_only_query(&mut tx, vec![block_headers[0].clone()])
             .await
             .unwrap();
 
@@ -731,7 +731,7 @@ mod tests {
         assert!(result.is_ok());
 
         let block_header_to_compare =
-            convert_rpc_blockheader_to_dto(block_headers[0].clone().into()).unwrap();
+            convert_rpc_blockheader_to_dto(block_headers[0].clone()).unwrap();
         let block_header_in_db = result.unwrap();
 
         assert_block_header_eq(block_header_in_db, block_header_to_compare);
@@ -750,11 +750,7 @@ mod tests {
         let mut tx = db.pool.begin().await.unwrap();
         insert_block_header_only_query(
             &mut tx,
-            block_headers
-                .clone()
-                .iter()
-                .map(|f| f.clone().into())
-                .collect(),
+            block_headers.clone().iter().map(|f| f.clone()).collect(),
         )
         .await
         .unwrap();
@@ -768,7 +764,7 @@ mod tests {
         assert!(result.is_ok());
 
         let block_header_to_compare =
-            convert_rpc_blockheader_to_dto(block_headers[0].clone().into()).unwrap();
+            convert_rpc_blockheader_to_dto(block_headers[0].clone()).unwrap();
         let block_header_in_db = result.unwrap();
         assert_block_header_eq(block_header_in_db, block_header_to_compare);
 
@@ -781,7 +777,7 @@ mod tests {
         assert!(result.is_ok());
 
         let block_header_to_compare =
-            convert_rpc_blockheader_to_dto(block_headers[1].clone().into()).unwrap();
+            convert_rpc_blockheader_to_dto(block_headers[1].clone()).unwrap();
         let block_header_in_db = result.unwrap();
         assert_block_header_eq(block_header_in_db, block_header_to_compare);
 
@@ -798,12 +794,12 @@ mod tests {
         // Insert the block header
         let mut tx = db.pool.begin().await.unwrap();
         let block_header = block_headers[0].clone();
-        let block_header = BlockHeaderWithFullTransaction {
+        let block_header = BlockHeader {
             number: "0xg".to_string(),
             ..block_header
         };
 
-        let result = insert_block_header_only_query(&mut tx, vec![block_header.into()]).await;
+        let result = insert_block_header_only_query(&mut tx, vec![block_header]).await;
         assert!(result.is_err());
 
         tx.rollback().await.unwrap();
@@ -818,19 +814,19 @@ mod tests {
 
         // Insert the block header
         let mut tx = db.pool.begin().await.unwrap();
-        insert_block_header_only_query(&mut tx, vec![block_headers[0].clone().into()])
+        insert_block_header_only_query(&mut tx, vec![block_headers[0].clone()])
             .await
             .unwrap();
 
         // Insert the block header again
         let same_block_header_with_diff_values = block_headers[0].clone();
-        let same_block_header_with_diff_values = BlockHeaderWithFullTransaction {
+        let same_block_header_with_diff_values = BlockHeader {
             gas_limit: "0x1".to_string(),
             ..same_block_header_with_diff_values
         };
         let result = insert_block_header_only_query(
             &mut tx,
-            vec![same_block_header_with_diff_values.clone().into()],
+            vec![same_block_header_with_diff_values.clone()],
         )
         .await;
         assert!(result.is_ok());
@@ -843,8 +839,7 @@ mod tests {
                 .await;
         assert!(result.is_ok());
         let block_header_to_compare =
-            convert_rpc_blockheader_to_dto(same_block_header_with_diff_values.clone().into())
-                .unwrap();
+            convert_rpc_blockheader_to_dto(same_block_header_with_diff_values.clone()).unwrap();
         let block_header_in_db = result.unwrap();
         assert_block_header_eq(block_header_in_db, block_header_to_compare);
 

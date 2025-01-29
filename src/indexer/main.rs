@@ -1,21 +1,49 @@
 use eyre::{Context, Result};
-use fossil_headers_db::indexer::lib::start_indexing_services;
-use std::sync::{
-    atomic::{AtomicBool, Ordering},
-    Arc,
+use fossil_headers_db::indexer::lib::{start_indexing_services, IndexingConfig};
+use std::{
+    env,
+    sync::{
+        atomic::{AtomicBool, Ordering},
+        Arc,
+    },
 };
 use tracing::info;
+use tracing_subscriber::fmt;
 
 #[tokio::main]
 pub async fn main() -> Result<()> {
     // TODO: this should be set to only be turned on if we're in dev mode
     dotenvy::dotenv()?;
 
+    let db_conn_string =
+        env::var("DB_CONNECTION_STRING").context("DB_CONNECTION_STRING must be set")?;
+    let node_conn_string =
+        env::var("NODE_CONNECTION_STRING").context("NODE_CONNECTION_STRING not set")?;
+
+    let should_index_txs = env::var("INDEX_TRANSACTIONS")
+        .unwrap_or_else(|_| "false".to_string())
+        .parse::<bool>()
+        .context("INDEX_TRANSACTIONS must be set")?;
+
+    // Initialize tracing subscriber
+    fmt().init();
+
     let should_terminate = Arc::new(AtomicBool::new(false));
 
     setup_ctrlc_handler(Arc::clone(&should_terminate))?;
 
-    start_indexing_services(should_terminate).await?;
+    let indexing_config = IndexingConfig {
+        db_conn_string,
+        node_conn_string,
+        should_index_txs,
+        max_retries: 10,
+        poll_interval: 10,
+        rpc_timeout: 300,
+        rpc_max_retries: 5,
+        index_batch_size: 100, // larger size if we are indexing headers only
+    };
+
+    start_indexing_services(indexing_config, should_terminate).await?;
 
     Ok(())
 }

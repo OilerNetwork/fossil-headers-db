@@ -1,5 +1,5 @@
 use crate::utils::convert_hex_string_to_i64;
-use eyre::{Context, Result};
+use eyre::{eyre, Context, Result};
 use once_cell::sync::Lazy;
 use reqwest::Client;
 use serde::{Deserialize, Serialize};
@@ -22,12 +22,12 @@ static NODE_CONNECTION_STRING: Lazy<Option<String>> = Lazy::new(|| {
 // Arbitrarily set, can be set somewhere else.
 const MAX_RETRIES: u8 = 5;
 
-#[derive(Deserialize, Debug)]
+#[derive(Serialize, Deserialize, Debug)]
 pub struct RpcResponse<T> {
     pub result: T,
 }
 
-#[derive(Serialize)]
+#[derive(Serialize, Deserialize, Debug)]
 struct RpcRequest<'a, T> {
     jsonrpc: &'a str,
     id: String,
@@ -35,24 +35,24 @@ struct RpcRequest<'a, T> {
     params: T,
 }
 
-#[derive(Debug, Deserialize, Clone)]
+#[derive(Debug, Serialize, Deserialize, Clone)]
 pub struct Transaction {
     pub hash: String,
-    #[serde(rename(deserialize = "blockNumber"))]
+    #[serde(rename = "blockNumber")]
     pub block_number: String,
-    #[serde(rename(deserialize = "transactionIndex"))]
+    #[serde(rename = "transactionIndex")]
     pub transaction_index: String,
     pub value: String,
-    #[serde(rename(deserialize = "gasPrice"))]
+    #[serde(rename = "gasPrice")]
     pub gas_price: Option<String>,
     pub gas: String,
     pub from: Option<String>,
     pub to: Option<String>,
-    #[serde(rename(deserialize = "maxPriorityFeePerGas"))]
+    #[serde(rename = "maxPriorityFeePerGas")]
     pub max_priority_fee_per_gas: Option<String>,
-    #[serde(rename(deserialize = "maxFeePerGas"))]
+    #[serde(rename = "maxFeePerGas")]
     pub max_fee_per_gas: Option<String>,
-    #[serde(rename(deserialize = "chainId"))]
+    #[serde(rename = "chainId")]
     pub chain_id: Option<String>,
 }
 
@@ -145,35 +145,6 @@ pub struct BlockHeaderWithFullTransaction {
     pub excess_blob_gas: Option<String>,
     #[serde(rename(deserialize = "parentBeaconBlockRoot"))]
     pub parent_beacon_block_root: Option<String>,
-}
-
-impl From<BlockHeaderWithFullTransaction> for BlockHeaderWithEmptyTransaction {
-    fn from(val: BlockHeaderWithFullTransaction) -> Self {
-        BlockHeaderWithEmptyTransaction {
-            gas_limit: val.gas_limit,
-            gas_used: val.gas_used,
-            base_fee_per_gas: val.base_fee_per_gas,
-            hash: val.hash,
-            nonce: val.nonce,
-            number: val.number,
-            receipts_root: val.receipts_root,
-            state_root: val.state_root,
-            transactions_root: val.transactions_root,
-            miner: val.miner,
-            logs_bloom: val.logs_bloom,
-            difficulty: val.difficulty,
-            total_difficulty: val.total_difficulty,
-            sha3_uncles: val.sha3_uncles,
-            extra_data: val.extra_data,
-            mix_hash: val.mix_hash,
-            parent_hash: val.parent_hash,
-            timestamp: val.timestamp,
-            withdrawals_root: val.withdrawals_root,
-            blob_gas_used: val.blob_gas_used,
-            excess_blob_gas: val.excess_blob_gas,
-            parent_beacon_block_root: val.parent_beacon_block_root,
-        }
-    }
 }
 
 pub async fn get_latest_finalized_blocknumber(timeout: Option<u64>) -> Result<i64> {
@@ -313,6 +284,68 @@ async fn make_retrying_rpc_call<T: Serialize, R: for<'de> Deserialize<'de> + Sen
         }
     }
 }
+#[derive(Debug, Serialize, Deserialize, Clone)]
+#[serde(untagged)]
+pub enum BlockTransaction {
+    Full(Box<Transaction>),
+    Hash(String),
+}
+
+impl TryFrom<BlockTransaction> for Transaction {
+    type Error = eyre::Error;
+
+    fn try_from(value: BlockTransaction) -> std::result::Result<Self, Self::Error> {
+        match value {
+            BlockTransaction::Full(tx) => Ok(*tx),
+            BlockTransaction::Hash(_) => Err(eyre!("Cannot convert hash into Transaction")),
+        }
+    }
+}
+
+#[derive(Debug, Serialize, Deserialize, Clone)]
+pub struct BlockHeader {
+    #[serde(rename = "gasLimit")]
+    pub gas_limit: String,
+    #[serde(rename = "gasUsed")]
+    pub gas_used: String,
+    #[serde(rename(deserialize = "baseFeePerGas"))]
+    pub base_fee_per_gas: Option<String>,
+    pub hash: String,
+    pub nonce: Option<String>,
+    pub number: String,
+    #[serde(rename = "receiptsRoot")]
+    pub receipts_root: Option<String>,
+    #[serde(rename = "stateRoot")]
+    pub state_root: Option<String>,
+    #[serde(rename = "transactionsRoot")]
+    pub transactions_root: Option<String>,
+    pub transactions: Vec<BlockTransaction>,
+    #[serde(rename = "parentHash")]
+    pub parent_hash: Option<String>,
+    pub miner: Option<String>,
+    #[serde(rename = "logsBloom")]
+    pub logs_bloom: Option<String>,
+    #[serde(rename = "difficulty")]
+    pub difficulty: Option<String>,
+    #[serde(rename = "totalDifficulty")]
+    pub total_difficulty: Option<String>,
+    #[serde(rename = "sha3Uncles")]
+    pub sha3_uncles: Option<String>,
+    #[serde(rename = "timestamp")]
+    pub timestamp: String,
+    #[serde(rename = "extraData")]
+    pub extra_data: Option<String>,
+    #[serde(rename = "mixHash")]
+    pub mix_hash: Option<String>,
+    #[serde(rename = "withdrawalsRoot")]
+    pub withdrawals_root: Option<String>,
+    #[serde(rename = "blobGasUsed")]
+    pub blob_gas_used: Option<String>,
+    #[serde(rename = "excessBlobGas")]
+    pub excess_blob_gas: Option<String>,
+    #[serde(rename = "parentBeaconBlockRoot")]
+    pub parent_beacon_block_root: Option<String>,
+}
 
 #[allow(dead_code)]
 pub trait EthereumRpcProvider {
@@ -325,7 +358,7 @@ pub trait EthereumRpcProvider {
         number: i64,
         include_tx: bool,
         timeout: Option<u64>,
-    ) -> impl Future<Output = Result<BlockHeaderWithFullTransaction>> + Send;
+    ) -> impl Future<Output = Result<BlockHeader>> + Send;
 }
 
 #[derive(Debug, Clone)]
@@ -458,7 +491,7 @@ impl EthereumRpcProvider for EthereumJsonRpcClient {
         number: i64,
         include_tx: bool,
         timeout: Option<u64>,
-    ) -> Result<BlockHeaderWithFullTransaction> {
+    ) -> Result<BlockHeader> {
         let params = RpcRequest {
             jsonrpc: "2.0",
             id: "0".to_string(),
@@ -466,11 +499,26 @@ impl EthereumRpcProvider for EthereumJsonRpcClient {
             params: (format!("0x{:x}", number), include_tx),
         };
 
-        self.make_retrying_rpc_call::<_, BlockHeaderWithFullTransaction>(&params, timeout)
+        self.make_retrying_rpc_call::<_, BlockHeader>(&params, timeout)
             .await
     }
 }
 
+// Attempts to convert a vector of BlockTransaction type into the Transaction type
+pub fn try_convert_full_tx_vector(block_tx_vec: Vec<BlockTransaction>) -> Result<Vec<Transaction>> {
+    let mut result_vec = vec![];
+
+    for block_tx in block_tx_vec.into_iter() {
+        let tx = block_tx.try_into()?;
+        result_vec.push(tx);
+    }
+
+    Ok(result_vec)
+}
+
+/// BIG TODO:
+/// Handle rpc errors correctly!
+/// Currently error cases are not handled as well.
 #[cfg(test)]
 mod tests {
     use std::{sync::mpsc::sync_channel, thread};
@@ -482,23 +530,24 @@ mod tests {
         net::TcpListener,
     };
 
-    async fn get_fixtures_for_tests() -> (String, BlockHeaderWithFullTransaction) {
+    async fn get_fixtures_for_tests() -> BlockHeader {
         let block_21598014_string =
             fs::read_to_string("tests/fixtures/eth_getBlockByNumber_21598014.json")
                 .await
                 .unwrap();
 
-        let block_21598014_response = serde_json::from_str::<
-            RpcResponse<BlockHeaderWithFullTransaction>,
-        >(&block_21598014_string)
-        .unwrap();
+        let block_21598014_response =
+            serde_json::from_str::<RpcResponse<BlockHeader>>(&block_21598014_string).unwrap();
 
-        (block_21598014_string, block_21598014_response.result)
+        block_21598014_response.result
     }
 
     // Helper function to start a TCP server that returns predefined JSON-RPC responses
     // Taken from katana codebase.
-    pub fn start_mock_rpc_server(addr: String, responses: Vec<String>) -> SyncSender<()> {
+    pub fn start_mock_rpc_server(
+        addr: String,
+        responses: Vec<Option<BlockHeader>>,
+    ) -> SyncSender<()> {
         use tokio::runtime::Builder;
         let (tx, rx) = sync_channel::<()>(1);
 
@@ -518,16 +567,70 @@ mod tests {
                     loop {
                         let (mut socket, _) = listener.accept().await.unwrap();
 
-                        // Read the request, so hyper would not close the connection
-                        let mut buffer = [0; 1024];
+                        // Read the request
+                        let mut buffer = [0; 512];
                         let _ = socket.read(&mut buffer).await.unwrap();
+
+                        let buffer: Vec<u8> = buffer.into_iter().take_while(|&x| x != 0).collect();
+
+                        let request_str = String::from_utf8_lossy(&buffer);
+
+                        // Find the JSON body after the empty line in HTTP request
+                        let body = if let Some(idx) = request_str.find("\r\n\r\n") {
+                            &request_str[idx + 4..]
+                        } else {
+                            ""
+                        };
 
                         // Get the response from the pre-determined list, and if the list is
                         // exhausted, return the last response.
-                        let response = if counter < responses.len() {
+                        let selected_response = if counter < responses.len() {
                             responses[counter].clone()
                         } else {
                             responses.last().unwrap().clone()
+                        };
+
+                        // Parse the JSON body and check the value
+                        let response = if let Ok(json) =
+                            serde_json::from_str::<RpcRequest<(String, bool)>>(body)
+                        {
+                            match selected_response {
+                                Some(data) => {
+                                    // Based on the params return full or hashed txs.
+                                    // Here assuming the provided responses are always with full txs.
+                                    let final_response = if json.params.1 {
+                                        data
+                                    } else {
+                                        // If set to false, then remove the full txs and replace with the hashed ones.
+                                        BlockHeader {
+                                            transactions: data
+                                                .transactions
+                                                .iter()
+                                                .map(|tx| match tx {
+                                                    BlockTransaction::Full(full_tx) => {
+                                                        BlockTransaction::Hash(full_tx.hash.clone())
+                                                    }
+                                                    other => other.clone(),
+                                                })
+                                                .collect(),
+                                            ..data
+                                        }
+                                    };
+
+                                    let final_response =
+                                        serde_json::to_string(&final_response).unwrap();
+                                    format!(
+                                        r#"{{ "jsonrpc": "2.0", "id": 1, "result": {} }}"#,
+                                        final_response
+                                    )
+                                }
+                                None => "{}".to_string(),
+                            }
+                        } else {
+                            // TODO: handle this and add tests.
+
+                            // Return an error response if JSON parsing fails
+                            r#"{"error": "Invalid JSON format"}"#.to_string()
                         };
 
                         // After reading, we send the pre-determined response
@@ -549,153 +652,113 @@ mod tests {
         tx
     }
 
-    #[test]
-    fn test_into_should_convert_empty_tx_from_full_tx() {
-        let full_tx = BlockHeaderWithFullTransaction {
-            gas_limit: "0x0".to_string(),
-            gas_used: "0x0".to_string(),
-            base_fee_per_gas: Some("0x0".to_string()),
-            hash: "0x0".to_string(),
-            nonce: Some("0x0".to_string()),
-            number: "0x0".to_string(),
-            receipts_root: Some("0x0".to_string()),
-            state_root: Some("0x0".to_string()),
-            transactions_root: Some("0x0".to_string()),
-            miner: Some("0x0".to_string()),
-            logs_bloom: Some("0x0".to_string()),
-            difficulty: Some("0x0".to_string()),
-            total_difficulty: Some("0x0".to_string()),
-            sha3_uncles: Some("0x0".to_string()),
-            timestamp: "0x0".to_string(),
-            extra_data: Some("0x0".to_string()),
-            mix_hash: Some("0x0".to_string()),
-            parent_hash: Some("0x0".to_string()),
-            withdrawals_root: Some("0x0".to_string()),
-            blob_gas_used: Some("0x0".to_string()),
-            excess_blob_gas: Some("0x0".to_string()),
-            parent_beacon_block_root: Some("0x0".to_string()),
-            transactions: vec![Transaction {
-                hash: "0x0".to_string(),
-                block_number: "0x0".to_string(),
-                transaction_index: "0x0".to_string(),
-                value: "0x0".to_string(),
-                gas_price: Some("0x0".to_string()),
-                gas: "0x0".to_string(),
-                from: Some("0x0".to_string()),
-                to: Some("0x0".to_string()),
-                max_priority_fee_per_gas: Some("0x0".to_string()),
-                max_fee_per_gas: Some("0x0".to_string()),
-                chain_id: Some("0x0".to_string()),
-            }],
+    #[tokio::test]
+    async fn test_try_from_for_full_tx() {
+        // Since this is a full tx, then try from should work
+        let header = get_fixtures_for_tests().await;
+
+        // Get one of the tx to test.
+        let tx = header.transactions[0].clone();
+
+        let expected_tx = tx.clone();
+
+        let expected_tx = if let BlockTransaction::Full(full_tx) = expected_tx {
+            full_tx
+        } else {
+            panic!("unexpected error due to tx type, should not happen.")
         };
 
-        let empty_tx: BlockHeaderWithEmptyTransaction = full_tx.clone().into();
-        assert_eq!(empty_tx.number, full_tx.number);
-        assert_eq!(empty_tx.hash, full_tx.hash);
-        assert_eq!(empty_tx.nonce, full_tx.nonce);
-        assert_eq!(empty_tx.parent_hash, full_tx.parent_hash);
-        assert_eq!(empty_tx.gas_limit, full_tx.gas_limit);
-        assert_eq!(empty_tx.gas_used, full_tx.gas_used);
-        assert_eq!(empty_tx.base_fee_per_gas, full_tx.base_fee_per_gas);
-        assert_eq!(empty_tx.receipts_root, full_tx.receipts_root);
-        assert_eq!(empty_tx.state_root, full_tx.state_root);
-        assert_eq!(empty_tx.transactions_root, full_tx.transactions_root);
-        assert_eq!(empty_tx.miner, full_tx.miner);
-        assert_eq!(empty_tx.logs_bloom, full_tx.logs_bloom);
-        assert_eq!(empty_tx.difficulty, full_tx.difficulty);
-        assert_eq!(empty_tx.total_difficulty, full_tx.total_difficulty);
-        assert_eq!(empty_tx.sha3_uncles, full_tx.sha3_uncles);
-        assert_eq!(empty_tx.timestamp, full_tx.timestamp);
-        assert_eq!(empty_tx.extra_data, full_tx.extra_data);
-        assert_eq!(empty_tx.mix_hash, full_tx.mix_hash);
-        assert_eq!(empty_tx.withdrawals_root, full_tx.withdrawals_root);
-        assert_eq!(empty_tx.blob_gas_used, full_tx.blob_gas_used);
-        assert_eq!(empty_tx.excess_blob_gas, full_tx.excess_blob_gas);
+        let actual_tx: Result<Transaction> = Transaction::try_from(tx.clone());
+
+        let actual_tx = actual_tx.unwrap();
+
+        assert_eq!(expected_tx.block_number, actual_tx.block_number);
+        assert_eq!(expected_tx.chain_id, actual_tx.chain_id);
+        assert_eq!(expected_tx.from, actual_tx.from);
+        assert_eq!(expected_tx.to, actual_tx.to);
+        assert_eq!(expected_tx.transaction_index, actual_tx.transaction_index);
+        assert_eq!(expected_tx.gas, actual_tx.gas);
+        assert_eq!(expected_tx.gas_price, actual_tx.gas_price);
+        assert_eq!(expected_tx.max_fee_per_gas, actual_tx.max_fee_per_gas);
         assert_eq!(
-            empty_tx.parent_beacon_block_root,
-            full_tx.parent_beacon_block_root
+            expected_tx.max_priority_fee_per_gas,
+            actual_tx.max_priority_fee_per_gas
         );
+        assert_eq!(expected_tx.value, actual_tx.value);
+        assert_eq!(expected_tx.hash, actual_tx.hash);
     }
 
-    #[test]
-    fn test_from_should_convert_empty_tx_from_full_tx() {
-        let full_tx = BlockHeaderWithFullTransaction {
-            gas_limit: "0x0".to_string(),
-            gas_used: "0x0".to_string(),
-            base_fee_per_gas: Some("0x0".to_string()),
-            hash: "0x0".to_string(),
-            nonce: Some("0x0".to_string()),
-            number: "0x0".to_string(),
-            receipts_root: Some("0x0".to_string()),
-            state_root: Some("0x0".to_string()),
-            transactions_root: Some("0x0".to_string()),
-            miner: Some("0x0".to_string()),
-            logs_bloom: Some("0x0".to_string()),
-            difficulty: Some("0x0".to_string()),
-            total_difficulty: Some("0x0".to_string()),
-            sha3_uncles: Some("0x0".to_string()),
-            timestamp: "0x0".to_string(),
-            extra_data: Some("0x0".to_string()),
-            mix_hash: Some("0x0".to_string()),
-            parent_hash: Some("0x0".to_string()),
-            withdrawals_root: Some("0x0".to_string()),
-            blob_gas_used: Some("0x0".to_string()),
-            excess_blob_gas: Some("0x0".to_string()),
-            parent_beacon_block_root: Some("0x0".to_string()),
-            transactions: vec![Transaction {
-                hash: "0x0".to_string(),
-                block_number: "0x0".to_string(),
-                transaction_index: "0x0".to_string(),
-                value: "0x0".to_string(),
-                gas_price: Some("0x0".to_string()),
-                gas: "0x0".to_string(),
-                from: Some("0x0".to_string()),
-                to: Some("0x0".to_string()),
-                max_priority_fee_per_gas: Some("0x0".to_string()),
-                max_fee_per_gas: Some("0x0".to_string()),
-                chain_id: Some("0x0".to_string()),
-            }],
+    #[tokio::test]
+    async fn test_try_into_for_full_tx() {
+        // Since this is a full tx, then try from should work
+        let header = get_fixtures_for_tests().await;
+
+        // Get one of the tx to test.
+        let tx = header.transactions[0].clone();
+
+        let expected_tx = if let BlockTransaction::Full(full_tx) = tx.clone() {
+            full_tx
+        } else {
+            panic!("unexpected error due to tx type, should not happen.")
         };
-        let empty_tx = BlockHeaderWithEmptyTransaction::from(full_tx.clone());
-        assert_eq!(empty_tx.number, full_tx.number);
-        assert_eq!(empty_tx.hash, full_tx.hash);
-        assert_eq!(empty_tx.nonce, full_tx.nonce);
-        assert_eq!(empty_tx.parent_hash, full_tx.parent_hash);
-        assert_eq!(empty_tx.gas_limit, full_tx.gas_limit);
-        assert_eq!(empty_tx.gas_used, full_tx.gas_used);
-        assert_eq!(empty_tx.base_fee_per_gas, full_tx.base_fee_per_gas);
-        assert_eq!(empty_tx.receipts_root, full_tx.receipts_root);
-        assert_eq!(empty_tx.state_root, full_tx.state_root);
-        assert_eq!(empty_tx.transactions_root, full_tx.transactions_root);
-        assert_eq!(empty_tx.miner, full_tx.miner);
-        assert_eq!(empty_tx.logs_bloom, full_tx.logs_bloom);
-        assert_eq!(empty_tx.difficulty, full_tx.difficulty);
-        assert_eq!(empty_tx.total_difficulty, full_tx.total_difficulty);
-        assert_eq!(empty_tx.sha3_uncles, full_tx.sha3_uncles);
-        assert_eq!(empty_tx.timestamp, full_tx.timestamp);
-        assert_eq!(empty_tx.extra_data, full_tx.extra_data);
-        assert_eq!(empty_tx.mix_hash, full_tx.mix_hash);
-        assert_eq!(empty_tx.withdrawals_root, full_tx.withdrawals_root);
-        assert_eq!(empty_tx.blob_gas_used, full_tx.blob_gas_used);
-        assert_eq!(empty_tx.excess_blob_gas, full_tx.excess_blob_gas);
+
+        let actual_tx: Result<Transaction> = tx.try_into();
+        assert!(actual_tx.is_ok());
+
+        let actual_tx = actual_tx.unwrap();
+
+        assert_eq!(expected_tx.block_number, actual_tx.block_number);
+        assert_eq!(expected_tx.chain_id, actual_tx.chain_id);
+        assert_eq!(expected_tx.from, actual_tx.from);
+        assert_eq!(expected_tx.to, actual_tx.to);
+        assert_eq!(expected_tx.transaction_index, actual_tx.transaction_index);
+        assert_eq!(expected_tx.gas, actual_tx.gas);
+        assert_eq!(expected_tx.gas_price, actual_tx.gas_price);
+        assert_eq!(expected_tx.max_fee_per_gas, actual_tx.max_fee_per_gas);
         assert_eq!(
-            empty_tx.parent_beacon_block_root,
-            full_tx.parent_beacon_block_root
+            expected_tx.max_priority_fee_per_gas,
+            actual_tx.max_priority_fee_per_gas
         );
+        assert_eq!(expected_tx.value, actual_tx.value);
+        assert_eq!(expected_tx.hash, actual_tx.hash);
+    }
+
+    #[tokio::test]
+    async fn test_try_convert_full_tx_vector() {
+        let header = get_fixtures_for_tests().await;
+
+        // Get one of the tx to test.
+        let expected_tx = header.transactions[0].clone();
+        let converted_tx = try_convert_full_tx_vector(vec![expected_tx.clone()]);
+
+        let expected_tx: Transaction = expected_tx.try_into().unwrap();
+
+        assert!(converted_tx.is_ok());
+        let actual_tx = converted_tx.unwrap()[0].clone();
+
+        assert_eq!(expected_tx.hash, actual_tx.hash);
+        assert_eq!(expected_tx.block_number, actual_tx.block_number);
+    }
+
+    #[tokio::test]
+    async fn test_try_convert_full_tx_vector_should_fail_for_hash_tx() {
+        let txs = try_convert_full_tx_vector(vec![BlockTransaction::Hash("0x12345ab".to_string())]);
+        assert!(txs.is_err());
+    }
+
+    #[tokio::test]
+    async fn test_try_convert_full_tx_vector_should_be_empty_when_empty_vec_given() {
+        let txs = try_convert_full_tx_vector(vec![]);
+        assert!(txs.is_ok());
+        assert!(txs.unwrap().is_empty());
     }
 
     #[tokio::test]
     async fn test_max_retries_should_affect_number_of_retries() {
-        let (rpc_response_string, _) = get_fixtures_for_tests().await;
+        let rpc_response = get_fixtures_for_tests().await;
         let sender = start_mock_rpc_server(
             "127.0.0.1:8091".to_owned(),
-            vec![
-                "{}".to_string(),
-                "{}".to_string(),
-                "{}".to_string(),
-                rpc_response_string,
-                "{}".to_string(),
-            ], // introduce empty responses
+            vec![None, None, None, Some(rpc_response), None], // introduce empty responses
         );
 
         // Set max retries to 2, which shouldn't have any success cases.
@@ -712,32 +775,32 @@ mod tests {
 
     #[tokio::test]
     async fn test_get_full_block_by_number_should_retry_when_failed() {
-        let (rpc_response_string, rpc_response_struct) = get_fixtures_for_tests().await;
+        let rpc_response = get_fixtures_for_tests().await;
         let sender = start_mock_rpc_server(
             "127.0.0.1:8092".to_owned(),
-            vec!["{}".to_string(), rpc_response_string], // introduce an empty response to induce failure
+            vec![None, Some(rpc_response.clone())], // introduce an empty response to induce failure
         );
 
-        let client = EthereumJsonRpcClient::new("http://127.0.0.1:8092".to_owned(), 5);
+        let client = EthereumJsonRpcClient::new("http://127.0.0.1:8092".to_owned(), 2);
         let block = client.get_full_block_by_number(21598014, false, None);
 
         // Trigger the response
         sender.send(()).unwrap();
 
         let block = block.await.unwrap();
-        assert_eq!(block.hash, rpc_response_struct.hash);
-        assert_eq!(block.number, rpc_response_struct.number);
+        assert_eq!(block.hash, rpc_response.hash);
+        assert_eq!(block.number, rpc_response.number);
     }
 
     #[tokio::test]
     async fn test_get_latest_finalized_blocknumber_should_retry_when_failed() {
-        let (rpc_response_string, rpc_response_struct) = get_fixtures_for_tests().await;
+        let rpc_response = get_fixtures_for_tests().await;
         let sender = start_mock_rpc_server(
             "127.0.0.1:8093".to_owned(),
-            vec!["{}".to_string(), rpc_response_string], // introduce an empty response to induce failure
+            vec![None, Some(rpc_response.clone())], // introduce an empty response to induce failure
         );
 
-        let client = EthereumJsonRpcClient::new("http://127.0.0.1:8093".to_owned(), 5);
+        let client = EthereumJsonRpcClient::new("http://127.0.0.1:8093".to_owned(), 2);
         let block_number = client.get_latest_finalized_blocknumber(None);
 
         // Trigger the response
@@ -746,33 +809,83 @@ mod tests {
         let block_number = block_number.await.unwrap();
         assert_eq!(
             block_number,
-            i64::from_str_radix(rpc_response_struct.number.strip_prefix("0x").unwrap(), 16)
-                .unwrap()
+            i64::from_str_radix(rpc_response.number.strip_prefix("0x").unwrap(), 16).unwrap()
         );
     }
 
     #[tokio::test]
-    async fn test_get_full_block_by_number() {
-        let (rpc_response_string, rpc_response_struct) = get_fixtures_for_tests().await;
-        let sender = start_mock_rpc_server("127.0.0.1:8094".to_owned(), vec![rpc_response_string]);
+    async fn test_get_full_block_by_number_without_tx() {
+        let rpc_response = get_fixtures_for_tests().await;
+        let sender = start_mock_rpc_server(
+            "127.0.0.1:8094".to_owned(),
+            vec![Some(rpc_response.clone())],
+        );
 
-        let client = EthereumJsonRpcClient::new("http://127.0.0.1:8094".to_owned(), 5);
+        let client = EthereumJsonRpcClient::new("http://127.0.0.1:8094".to_owned(), 1);
         let block = client.get_full_block_by_number(21598014, false, None);
 
         // Trigger the response
         sender.send(()).unwrap();
 
         let block = block.await.unwrap();
-        assert_eq!(block.hash, rpc_response_struct.hash);
-        assert_eq!(block.number, rpc_response_struct.number);
+        assert_eq!(block.hash, rpc_response.hash);
+        assert_eq!(block.number, rpc_response.number);
+        for (idx, block_tx) in block.transactions.iter().enumerate() {
+            if let BlockTransaction::Hash(hash) = block_tx {
+                let fixture_tx: Transaction =
+                    rpc_response.transactions[idx].clone().try_into().unwrap();
+                assert_eq!(hash.to_owned(), fixture_tx.hash)
+            } else {
+                panic!("returned tx are full.")
+            }
+        }
+    }
+
+    #[tokio::test]
+    async fn test_get_full_block_by_number_with_tx() {
+        let rpc_response = get_fixtures_for_tests().await;
+        let sender = start_mock_rpc_server(
+            "127.0.0.1:8095".to_owned(),
+            vec![Some(rpc_response.clone())],
+        );
+
+        let client = EthereumJsonRpcClient::new("http://127.0.0.1:8095".to_owned(), 1);
+        let block = client.get_full_block_by_number(21598014, true, None);
+
+        // Trigger the response
+        sender.send(()).unwrap();
+
+        let block = block.await.unwrap();
+        assert_eq!(block.hash, rpc_response.hash);
+        assert_eq!(block.number, rpc_response.number);
+        for (idx, block_tx) in block.transactions.iter().enumerate() {
+            if let BlockTransaction::Full(tx) = block_tx {
+                let fixture_tx: Transaction = rpc_response.clone().transactions[idx]
+                    .clone()
+                    .try_into()
+                    .unwrap();
+
+                assert_eq!(tx.hash, fixture_tx.hash);
+                assert_eq!(tx.block_number, fixture_tx.block_number);
+                assert_eq!(tx.from, fixture_tx.from);
+                assert_eq!(tx.to, fixture_tx.to);
+                assert_eq!(tx.transaction_index, fixture_tx.transaction_index);
+                assert_eq!(tx.value, fixture_tx.value);
+            } else {
+                panic!("returned tx are hashed.")
+            }
+        }
     }
 
     #[tokio::test]
     async fn test_get_latest_finalized_blocknumber() {
-        let (rpc_response_string, rpc_response_struct) = get_fixtures_for_tests().await;
-        let sender = start_mock_rpc_server("127.0.0.1:8095".to_owned(), vec![rpc_response_string]);
+        let rpc_response = get_fixtures_for_tests().await;
+        let sender = start_mock_rpc_server(
+            "127.0.0.1:8096".to_owned(),
+            vec![Some(rpc_response.clone())],
+        );
 
-        let client = EthereumJsonRpcClient::new("http://127.0.0.1:8095".to_owned(), 5);
+        let client = EthereumJsonRpcClient::new("http://127.0.0.1:8096".to_owned(), 1);
         let block_number = client.get_latest_finalized_blocknumber(None);
 
         // Trigger the response
@@ -781,8 +894,7 @@ mod tests {
         let block_number = block_number.await.unwrap();
         assert_eq!(
             block_number,
-            i64::from_str_radix(rpc_response_struct.number.strip_prefix("0x").unwrap(), 16)
-                .unwrap()
+            i64::from_str_radix(rpc_response.number.strip_prefix("0x").unwrap(), 16).unwrap()
         );
     }
 
