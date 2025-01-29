@@ -7,9 +7,6 @@ use std::{future::Future, time::Duration};
 use tokio::time::sleep;
 use tracing::{error, warn};
 
-#[cfg(test)]
-use std::sync::mpsc::SyncSender;
-
 // TODO: instead of keeping this static, make it passable as a dependency.
 // This should allow us to test this module.
 static CLIENT: Lazy<Client> = Lazy::new(Client::new);
@@ -521,7 +518,7 @@ pub fn try_convert_full_tx_vector(block_tx_vec: Vec<BlockTransaction>) -> Result
 /// Currently error cases are not handled as well.
 #[cfg(test)]
 mod tests {
-    use std::{sync::mpsc::sync_channel, thread};
+    use std::thread;
 
     use super::*;
     use tokio::{
@@ -544,12 +541,8 @@ mod tests {
 
     // Helper function to start a TCP server that returns predefined JSON-RPC responses
     // Taken from katana codebase.
-    pub fn start_mock_rpc_server(
-        addr: String,
-        responses: Vec<Option<BlockHeader>>,
-    ) -> SyncSender<()> {
+    pub fn start_mock_rpc_server(addr: String, responses: Vec<Option<BlockHeader>>) {
         use tokio::runtime::Builder;
-        let (tx, rx) = sync_channel::<()>(1);
 
         thread::spawn(move || {
             Builder::new_current_thread()
@@ -562,7 +555,7 @@ mod tests {
                     let mut counter = 0;
 
                     // Wait for a signal to return the response.
-                    rx.recv().unwrap();
+                    // rx.recv().unwrap();
 
                     loop {
                         let (mut socket, _) = listener.accept().await.unwrap();
@@ -647,9 +640,6 @@ mod tests {
                     }
                 });
         });
-
-        // Returning the sender to allow controlling the response timing.
-        tx
     }
 
     #[tokio::test]
@@ -756,7 +746,7 @@ mod tests {
     #[tokio::test]
     async fn test_max_retries_should_affect_number_of_retries() {
         let rpc_response = get_fixtures_for_tests().await;
-        let sender = start_mock_rpc_server(
+        start_mock_rpc_server(
             "127.0.0.1:8091".to_owned(),
             vec![None, None, None, Some(rpc_response), None], // introduce empty responses
         );
@@ -766,9 +756,6 @@ mod tests {
 
         let block = client.get_full_block_by_number(21598014, false, None);
 
-        // Trigger the response
-        sender.send(()).unwrap();
-
         let block = block.await;
         assert!(block.is_err());
     }
@@ -776,16 +763,13 @@ mod tests {
     #[tokio::test]
     async fn test_get_full_block_by_number_should_retry_when_failed() {
         let rpc_response = get_fixtures_for_tests().await;
-        let sender = start_mock_rpc_server(
+        start_mock_rpc_server(
             "127.0.0.1:8092".to_owned(),
             vec![None, Some(rpc_response.clone())], // introduce an empty response to induce failure
         );
 
         let client = EthereumJsonRpcClient::new("http://127.0.0.1:8092".to_owned(), 2);
         let block = client.get_full_block_by_number(21598014, false, None);
-
-        // Trigger the response
-        sender.send(()).unwrap();
 
         let block = block.await.unwrap();
         assert_eq!(block.hash, rpc_response.hash);
@@ -795,16 +779,13 @@ mod tests {
     #[tokio::test]
     async fn test_get_latest_finalized_blocknumber_should_retry_when_failed() {
         let rpc_response = get_fixtures_for_tests().await;
-        let sender = start_mock_rpc_server(
+        start_mock_rpc_server(
             "127.0.0.1:8093".to_owned(),
             vec![None, Some(rpc_response.clone())], // introduce an empty response to induce failure
         );
 
         let client = EthereumJsonRpcClient::new("http://127.0.0.1:8093".to_owned(), 2);
         let block_number = client.get_latest_finalized_blocknumber(None);
-
-        // Trigger the response
-        sender.send(()).unwrap();
 
         let block_number = block_number.await.unwrap();
         assert_eq!(
@@ -816,16 +797,13 @@ mod tests {
     #[tokio::test]
     async fn test_get_full_block_by_number_without_tx() {
         let rpc_response = get_fixtures_for_tests().await;
-        let sender = start_mock_rpc_server(
+        start_mock_rpc_server(
             "127.0.0.1:8094".to_owned(),
             vec![Some(rpc_response.clone())],
         );
 
         let client = EthereumJsonRpcClient::new("http://127.0.0.1:8094".to_owned(), 1);
         let block = client.get_full_block_by_number(21598014, false, None);
-
-        // Trigger the response
-        sender.send(()).unwrap();
 
         let block = block.await.unwrap();
         assert_eq!(block.hash, rpc_response.hash);
@@ -844,16 +822,13 @@ mod tests {
     #[tokio::test]
     async fn test_get_full_block_by_number_with_tx() {
         let rpc_response = get_fixtures_for_tests().await;
-        let sender = start_mock_rpc_server(
+        start_mock_rpc_server(
             "127.0.0.1:8095".to_owned(),
             vec![Some(rpc_response.clone())],
         );
 
         let client = EthereumJsonRpcClient::new("http://127.0.0.1:8095".to_owned(), 1);
         let block = client.get_full_block_by_number(21598014, true, None);
-
-        // Trigger the response
-        sender.send(()).unwrap();
 
         let block = block.await.unwrap();
         assert_eq!(block.hash, rpc_response.hash);
@@ -880,16 +855,13 @@ mod tests {
     #[tokio::test]
     async fn test_get_latest_finalized_blocknumber() {
         let rpc_response = get_fixtures_for_tests().await;
-        let sender = start_mock_rpc_server(
+        start_mock_rpc_server(
             "127.0.0.1:8096".to_owned(),
             vec![Some(rpc_response.clone())],
         );
 
         let client = EthereumJsonRpcClient::new("http://127.0.0.1:8096".to_owned(), 1);
         let block_number = client.get_latest_finalized_blocknumber(None);
-
-        // Trigger the response
-        sender.send(()).unwrap();
 
         let block_number = block_number.await.unwrap();
         assert_eq!(

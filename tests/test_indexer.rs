@@ -53,4 +53,8 @@ async fn should_fail_to_index_without_rpc_available() {
     let result = start_indexing_services(indexing_config, Arc::new(AtomicBool::new(false))).await;
 
     assert!(result.is_err());
+    assert_eq!(
+        result.unwrap_err().to_string(),
+        "Failed to get latest block number"
+    );
 }

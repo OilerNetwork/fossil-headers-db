@@ -1,4 +1,19 @@
 services:
+  indexer:
+    build:
+      dockerfile: Dockerfile.indexer
+      context: .
+    ports:
+      - "5050:5050"
+    networks:
+      - local_network
+    environment:
+      - DB_CONNECTION_STRING=postgres://postgres:postgres@db:5432/postgres
+      - NODE_CONNECTION_STRING=${NODE_CONNECTION_STRING}
+      - ROUTER_ENDPOINT=${ROUTER_ENDPOINT}
+    depends_on:
+      db:
+        condition: service_healthy
   db:
     image: postgres:16-alpine
     environment:
@@ -7,8 +22,17 @@ services:
       - POSTGRES_DB=postgres
     ports:
       - "5432:5432"
+    networks:
+      - local_network
+    volumes:
+      - db_local_data:/var/lib/postgresql/local_test
     healthcheck:
       test: ["CMD-SHELL", "pg_isready -U postgres"]
       interval: 5s
       timeout: 5s
       retries: 5
+
+networks:
+  local_network:
+volumes:
+  db_local_data:

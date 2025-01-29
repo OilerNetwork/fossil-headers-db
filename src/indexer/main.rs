@@ -12,8 +12,9 @@ use tracing_subscriber::fmt;
 
 #[tokio::main]
 pub async fn main() -> Result<()> {
-    // TODO: this should be set to only be turned on if we're in dev mode
-    dotenvy::dotenv()?;
+    if env::var("IS_DEV").is_ok_and(|v| v.parse().unwrap_or(false)) {
+        dotenvy::dotenv()?;
+    }
 
     let db_conn_string =
         env::var("DB_CONNECTION_STRING").context("DB_CONNECTION_STRING must be set")?;
