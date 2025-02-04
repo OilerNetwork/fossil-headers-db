@@ -59,7 +59,7 @@ jobs:
       - name: Install required tools
         run: cargo install cargo-llvm-cov && cargo install sqlx-cli --features postgres
 
-      - run: chmod +x scripts/run-coverage.sh && chmod +x scripts/run-migrations.sh
+      - run: chmod +x scripts/run-test.sh && chmod +x scripts/run-migrations.sh
 
       - name: Run migrations
         env:
@@ -67,15 +67,15 @@ jobs:
         run: scripts/run-migrations.sh
 
       - name: Run tests
-        run: scripts/run-coverage.sh
+        run: scripts/run-test.sh
 
-      - uses: hrishikesh-kadam/setup-lcov@v1
-        with:
-          ref: v2.2
+      # - uses: hrishikesh-kadam/setup-lcov@v1
+      #   with:
+      #     ref: v2.2
 
-      - name: Report code coverage
-        uses: zgosalvez/github-actions-report-lcov@v4
-        with:
-          coverage-files: lcov.info
-          github-token: ${{ secrets.GITHUB_TOKEN }}
-          update-comment: true
+      # - name: Report code coverage
+      #   uses: zgosalvez/github-actions-report-lcov@v4
+      #   with:
+      #     coverage-files: lcov.info
+      #     github-token: ${{ secrets.GITHUB_TOKEN }}
+      #     update-comment: true
