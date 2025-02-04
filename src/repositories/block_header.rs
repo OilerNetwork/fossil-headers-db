@@ -6,7 +6,6 @@ use crate::{
     utils::{convert_hex_string_to_i32, convert_hex_string_to_i64},
 };
 
-#[allow(dead_code)]
 #[derive(Debug, Clone, sqlx::FromRow)]
 pub struct TransactionDto {
     pub transaction_hash: String,
@@ -22,7 +21,6 @@ pub struct TransactionDto {
     pub chain_id: Option<String>,
 }
 
-#[allow(dead_code)]
 #[derive(Debug, Clone, sqlx::FromRow)]
 pub struct BlockHeaderDto {
     pub gas_limit: i64,
@@ -50,7 +48,6 @@ pub struct BlockHeaderDto {
     pub parent_beacon_block_root: Option<String>,
 }
 
-#[allow(dead_code)]
 fn convert_rpc_blockheader_to_dto(block_header: BlockHeader) -> Result<BlockHeaderDto> {
     // These fields should be converted successfully, and if its not converted successfully,
     // it should be considered an unintended bug.
@@ -98,7 +95,6 @@ fn convert_rpc_blockheader_to_dto(block_header: BlockHeader) -> Result<BlockHead
     })
 }
 
-#[allow(dead_code)]
 fn convert_rpc_transaction_to_dto(transaction: Transaction) -> Result<TransactionDto> {
     let block_number = convert_hex_string_to_i64(&transaction.block_number)?;
     let transaction_index = convert_hex_string_to_i32(&transaction.transaction_index)?;
@@ -124,7 +120,6 @@ fn convert_rpc_transaction_to_dto(transaction: Transaction) -> Result<Transactio
     })
 }
 
-#[allow(dead_code)]
 // Using transaction with multi row inserts seem to be the fastest
 pub async fn insert_block_header_query(
     db_tx: &mut sqlx::Transaction<'_, Postgres>,
@@ -274,7 +269,6 @@ async fn insert_block_txs_query(
     Ok(())
 }
 
-#[allow(dead_code)]
 pub async fn insert_block_header_only_query(
     db_tx: &mut sqlx::Transaction<'_, Postgres>,
     block_headers: Vec<BlockHeader>,
