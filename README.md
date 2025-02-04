@@ -1,225 +1,223 @@
-<a  name="readme-top"></a>
+# Fossil Indexer
 
-<h3  align="center">Blockheaders/Transactions Tool</h3>
-<p  align="center">
+Indexer for Blockheaders DB.
 
-Tool to maintain Blockheaders/Transactions DB. Data is queried via RPC calls.
+## Table of contents
 
-<!-- TABLE OF CONTENTS -->
-<details>
-<summary>Table of Contents</summary>
-<ol>
-<li><a  href="#getting-started">Getting Started</a>
-<li><a  href="#prerequisites">Prerequisites</a></li>
-<li><a  href="#installation">Installation</a></li>
-<li><a  href="#usage">Usage</a></li>
-</ol>
-</details>
-<!-- ABOUT THE PROJECT -->
+- [Fossil Indexer](#fossil-indexer)
+  - [Table of contents](#table-of-contents)
+  - [Prerequisites](#prerequisites)
+    - [Additional prerequisites](#additional-prerequisites)
+  - [Step by step guide](#step-by-step-guide)
+    - [1. Installation](#1-installation)
+    - [2. Configure your application](#2-configure-your-application)
+    - [3. Build and run the application](#3-build-and-run-the-application)
+    - [4. Querying the database](#4-querying-the-database)
+    - [5. Stopping the indexer](#5-stopping-the-indexer)
+  - [Development](#development)
+    - [Running the application binary](#running-the-application-binary)
+    - [Running tests](#running-tests)
+    - [Configuration](#configuration)
+      - [1. `INDEX_TRANSACTION`](#1-index_transaction)
 
-## Getting Started
+## Prerequisites
 
-To get this application runninng locally, follow these steps.
+Ensure you have the following installed before starting:
 
-### Prerequisites
+- Rust: To build the indexer binaries. You will need rust in order to run the indexer. You can visit https://www.rust-lang.org/tools/install in order to get more information on how to install rust on your machine.
+- Docker: To run and build images for the indexers. Visit https://docs.docker.com/get-docker/ to get more details as to how you may be able to install docker on your machine.
+- Git: For version control and downloading code. Go to https://git-scm.com/downloads to get instructions on how to install git for your machine.
 
-What you would need:
+### Additional prerequisites
 
-- Rust
+As this is an indexer and it relies on calling the RPC endpoint of a blockchain node in order to get data on the blockchain, you might want to create an account with a RPC provider such provider is [Infura](https://www.infura.io/).
 
-```
-https://www.rust-lang.org/tools/install
-```
+## Step by step guide
 
-### Installation
+This step by step guide utilizes docker in order to simplify the setup process for most of its components. If you are working on this project and would like to run it without docker, or want more details regarding how to configure the indexer, please refer to the [Development](#development) section.
 
-1. Clone the repo
+> Remember to install all the prerequisites before starting, or something might fail along the way.
+
+### 1. Installation
+
+1. Open your terminal (Command prompt for windows, Terminal on Max/Linux)
+2. Clone the project down by running the following commands:
 
 ```sh
 git clone https://github.com/OilerNetwork/fossil-headers-db.git
 ```
 
-1. Create a .env file in the project's root folder
-
-_fossil-headers-db/.env_
-
-```
-DB_CONNECTION_STRING=<db_connection_string>
-NODE_CONNECTION_STRING=<node_connection_string>
-ROUTER_ENDPOINT=<router_endpoint_string>
-RUST_LOG=<log_level> [optional]
-```
-
-1. Build project
+Since we these changes are currently in a branch, you'll also have to checkout in order to be at the correct branch.
 
 ```sh
-cargo build
+git checkout chore/add-readme
 ```
 
-<p  align="right">(<a  href="#readme-top">back to top</a>)</p>
-  
-<!-- USAGE EXAMPLES -->
+### 2. Configure your application
 
-## Usage
+Now we can configure your application via editing the `.env` file.
 
-### Mode 1 - Update
-
-Fetches blockheaders and transaction data via RPC and writes to DB.
-
-**Usage:** _cargo run update_
-
-**Optional parameters:**
-
-1.  _start <block_number>_
-
-- First block number to start updating the database from. (Inclusive)
-
-- **Default**: Latest block in the database + 1
-
-1.  _end <block_number>_
-
-- Last block number to update the database to. (Inclusive)
-
-- **Default**: Polling mode - updates to latest block, after which it polls for new blocks
-
-2.  _loopsize <num_threads>_
-
-- Max number of threads running at once
-
-- **Default**: Max functional connections for our DB -- 4000
-  **Examples:**
+1. Copy the contents of `.env.example` to a new file called `.env` via the following:
 
 ```sh
-cargo  run  update
+cp .env.example .env
 ```
+
+2. Fill in the values for `NODE_CONNECTION_STRING` which is the URL for the RPC endpoint of a full Ethereum node. You may get such a url from RPC providers like [Infura](https://www.infura.io/), which usually have RPC URL in the form of `https://sepolia.infura.io/v3/<infura_api_key>`.
+
+3. Remember to save the file after adding the values. The file should similar to this after your change:
 
 ```sh
-cargo  run  update  --loopsize  10
+NODE_CONNECTION_STRING=https://sepolia.infura.io/v3/<infura_api_key> # if you use infura
+ROUTER_ENDPOINT=0.0.0.0:5050
+INDEX_TRANSACTIONS=false # flag to index transactions
 ```
+
+### 3. Build and run the application
+
+1. Start running the application via docker compose. Depending on the version of your docker the command might slightly differ:
 
 ```sh
-cargo  run  update  --start  19983846
+docker compose -f docker-compose.local.yml up -d --build
 ```
+
+> if you are using an older version of docker then it might be `docker-compose` instead of `docker compose`
+
+This spins up both the indexer and a postgres database for the indexer.
+
+2. The building process might take a while, but once its done you should see something like this:
 
 ```sh
-cargo  run  update  --end  19983849
+[+] Running 2/2
+ ✔ Container fossil-headers-db-db-1       Healthy                                                                                                                                                                         0.5s
+ ✔ Container fossil-headers-db-indexer-1  Running
 ```
+
+3. You may run the following command in order to check the status of the indexer:
 
 ```sh
-cargo  run  update  -s  19983846  -e  19983849
+docker compose -f docker-compose.local.yml ps
 ```
+
+which should show you the status like so:
 
 ```sh
-cargo  run  update  -s  19983846  -end  19983849  -l  100
+NAME                          IMAGE                       COMMAND                  SERVICE   CREATED          STATUS                    PORTS
+fossil-headers-db-db-1        postgres:16-alpine          "docker-entrypoint.s…"   db        27 minutes ago   Up 27 minutes (healthy)   0.0.0.0:5432->5432/tcp
+fossil-headers-db-indexer-1   fossil-headers-db-indexer   "/usr/app/fossil_ind…"   indexer   27 minutes ago   Up 26 minutes             0.0.0.0:5050->5050/tcp
 ```
 
-### Mode 2 - Fix
-
-Patches missing blockheaders and transaction data from the DB, retrieving via RPC
-
-**Usage:** _cargo run update_
-
-**Optional parameters:**
-
-1.  _start <block_number>_
-
-- First block number to start checking the database from. (Inclusive)
-
-- **Default**: 0
-
-1.  _end <block_number>_
-
-- Last block number to check the database to. (Inclusive)
-
-- **Default**: Last entry in the database
-
-**Examples:**
+4. You can also look at the current logs to see how the indexing is proceeding.
 
 ```sh
-cargo  run  fix
+docker compose -f docker-compose.local.yml logs -f -t
 ```
+
+### 4. Querying the database 
+
+With the indexer running, now you can query the database to get the required information. The database should be available at `postgres://postgres:postgres@localhost:5432/postgres`, and you can use any tool to connect to the database to access or query it. Here we provide some simple examples of querying the database through the postgresql container.
+
+1. First, get the container id of the database via docker.
 
 ```sh
-cargo  run  fix  --start  19983846
+docker ps
 ```
+
+You should see something like this:
 
 ```sh
-cargo  run  fix  --end  19983849
+CONTAINER ID   IMAGE                       COMMAND                  CREATED         STATUS                   PORTS                    NAMES
+5d7bf5e20a52   fossil-headers-db-indexer   "/usr/app/fossil_ind…"   2 minutes ago   Up 2 minutes             0.0.0.0:5050->5050/tcp   fossil-headers-db-indexer-1
+e16f4ab0016f   postgres:16-alpine          "docker-entrypoint.s…"   2 minutes ago   Up 2 minutes (healthy)   0.0.0.0:5432->5432/tcp   fossil-headers-db-db-1
 ```
+
+The information you are interested in is the container ID of the container named `fossil-headers-db-db-1`, or something similar. In this case that ID is `e16f4ab0016f`.
+
+2. You can now query the block headers information. Here we query the gas information for the latest 5 blocks from the database.
 
 ```sh
-cargo  run  fix  -s  19983846  -e  19983849
+docker exec e16f4ab0016f  psql -U postgres -d postgres -c "SELECT number, gas_limit, gas_used, base_fee_per_gas, blob_gas_used, excess_blob_gas FROM blockheaders ORDER BY number DESC LIMIT 5;"
 ```
 
-<p  align="right">(<a  href="#readme-top">back to top</a>)</p>
+Replace `e16f4ab0016f` with the container id for your database.
 
-<!-- Endpoints -->
 
-# Endpoints
+3. You can also query the current indexing progress by querying against the `index_metadata` table.
 
-## General
-
-### 1. Health
-
-Used to ping server for alive status.
-
-#### Request:
-
-```c
-curl --location '<ROUTER_ENDPOINT>'
---header 'Content-Type: application/json'
+```sh
+docker exec e16f4ab0016f psql -U postgres -d postgres -c "SELECT * FROM index_metadata;"
 ```
 
-#### Response:
+Replace `e16f4ab0016f` with the container id for your database.
 
-```c
-Healthy
+### 5. Stopping the indexer
+
+You can stop your indexer and your database like so:
+
+```sh
+docker compose -f docker-compose.local.yml stop
 ```
 
-## MMR
+If you however decides to remove the database and **reset all your progress**, you can do the following:
 
-### 1. GET latest updated MMR information
 
-Retrieves the latest MMR state
-
-### Request:
-
-```c
-curl --location '127.0.0.1:8080/mmr'
---header 'Content-Type: application/json'
+```sh
+docker compose -f docker-compose.local.yml down
 ```
 
-### Response:
 
-```c
-{
-"latest_blocknumber": 17992
-"latest_roothash": "0x02e6baea3eba34b9c581bd719465a2181c5dc989891517add951ffb5b0d421f0",
-"update_timestamp": "2024-08-02T05:24:06.928467Z"
-}
+## Development
+
+This section contains details for those who might want to develop further on the project.
+
+### Running the application binary
+
+Before running the application, you should know it relies on a few components:
+
+1. A postgresql database
+2. A ethereum node with an available RPC endpoint
+
+The connection url for these components should be provided via the `.env` file. An example is already available at `.env.test`
+
+```sh
+DB_CONNECTION_STRING=postgres://postgres:postgres@localhost:5432/postgres
+NODE_CONNECTION_STRING=http://x.x.x.x:x
 ```
 
-### 2. GET proof
+You can then run the application by doing the following command:
 
-Retrieve proof for the provided `<blocknumber>`
-
-### Request:
-
-```c
-curl --location '127.0.0.1:8080/mmr/<blocknumber>'
---header 'Content-Type: application/json'
+```sh
+cargo run --bin fossil_indexer
 ```
 
-### Response:
+This should build and run the indexer.
 
-```c
-{
-"peaks_hashes": "[\"0x5a0a7e39c749e1c03feaff0a6d8fca6181253d47c9aae3c6ddd0c0475a9c8a61\",\"0x04182373152d407f88a71a38960aa714e2b3a8988e3e3606e2ced21473e4a0c5\",\"0x2558950083d01e2a8a6699e44e3d97642586b3bde1d237a9d34c8d9d77178a22\",\"0x6a29cea580488bd512185f9cc16deec823dd58b85f1dd8408cc46c40f8ab10b8\",\"0x0d995a2bf7801bc7e56776bfc441b957d7959d662c5262405feb572be1928011\",\"0x1933e13bd7e5e4227b20a4f972a302eaad8da1fc0f455138d79af68da3c86e3f\",\"0x0a9b742073888cbd44e0b609aed502ccc8454d32b827e86f66181d6a7fa4a086\",\"0x7bef241cbe2dbbc2c04eb9431b2471b2678bc792bf460ec9d8b15882301f9da7\",\"0x8bd6d00cfe79edc41a17c724d965427d41ab865d58ce57690316ce368386080a\"]",
-"element_index": "2",
-"elements_count": "57113",
-"element_hash": "0x88e96d4537bea4d9c05d12549907b32561d3bf31f45aae734cdc119f13406cb6",
-"sibling_hashes": "[\"0xd4e56740f876aef8c010b86a40d5f56745a118d0906a34e69aec8c0db1cb8fa3\",\"0xabbd3abf1b19fd233c45ea4a2051369190b069f58f9c5fe8d016c461df048748\",\"0xa2ce5dd7d1a450b2e3ef0b41092b5a782d3090ac5d7f5257d82eb0ca67ba21ec\",\"0x09b3664e5f2495f402b45ae8b056a4e9c6beeafd44494aebcc671c0a337322ab\",\"0x84a1dee387cded87e6bee1382df8b40b363dd8212c96b18dff77da2df504db38\",\"0x8d970b7ad08cfc4ab69b323d941e80478a4c4fc99ee165c4e6525d3a1e46cda7\",\"0x5cba303c0aaf9f6bb48a7003bae08ae19b44732dc5d0366a127bdf4ee82c0d21\",\"0x520559e1f475be63069c022f59b99e9272dbbd8d2888635055d2b516539c8426\",\"0x6cb0b6aa14349728919cb59ccd3c0bb62721539202f4d5c42bfba1612a577de7\",\"0x2bf3c9d3a66d63d4b16e8ce7681ccbe7e382ef721001dac950088cfd2a3dfe5d\",\"0x66ba3f44720909e4ed0ba754efb13a1eb85fe6a1c80770441cc36d762108ee60\",\"0x3661b2303a69a0a960c4bb4e732daa56f44a57f95700e20ad1915866d18e1980\",\"0x044c1636b3a10f042b40ee3ee4ccd0156ddebd88d4daab1d2c68ed6d9918fa4c\",\"0xdee2ec7f050d0c19467f33e26363bfd869d5fa3847fd49bd1bb218469e92c7af\"]"
-}
+### Running tests
+
+The tests for the indexer requires you to setup an testing environment consisting of a database, which is required to test some of the indexing behavior. Before running the test you would have to run a docker compose file to setup the environment.
+
+```sh
+docker compose -f docker-compose.test.yml up
 ```
 
-<p  align="right">(<a  href="#readme-top">back to top</a>)</p>
+After that is setup, you can now run the test via the script provided at [scripts/run-test.sh](scripts/run-test.sh)
+
+```sh
+scripts/run-test.sh
+```
+
+> If you are facing issue running this on Mac/Linux, it might be a permissions issue.Remember to give it execution permissions via `chmod +x scripts/run-test.sh`.
+
+The scripts just runs `cargo test` with the `DATABASE_URL` field provided, so you can also run it with a different `DATABASE_URL` if so desired.
+
+### Configuration
+
+There are currently only **1** configuration available via environmental variables, and the rest are available only by changing the code itself.
+
+#### 1. `INDEX_TRANSACTION`
+
+Available to configure via env vars. Defaults to `false`
+
+This enables or disables indexing transactions for each of the headers.
+
+<p  align="right">(<a  href="#fossil-indexer">back to top</a>)</p>
