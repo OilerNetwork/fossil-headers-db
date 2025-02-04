@@ -748,12 +748,9 @@ mod tests {
 
         // Insert the block header
         let mut tx = db.pool.begin().await.unwrap();
-        insert_block_header_only_query(
-            &mut tx,
-            block_headers.clone().iter().map(|f| f.clone()).collect(),
-        )
-        .await
-        .unwrap();
+        insert_block_header_only_query(&mut tx, block_headers.clone())
+            .await
+            .unwrap();
 
         // Check if the first block is inserted
         let result: Result<BlockHeaderDto, sqlx::Error> =

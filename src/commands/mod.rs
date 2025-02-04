@@ -70,8 +70,6 @@ async fn fill_null_rows(
     let mut range_end_pointer: i64;
 
     while !should_terminate.load(Ordering::Relaxed) && range_start_pointer <= search_end {
-        println!("or this?");
-
         range_end_pointer = search_end.min(range_start_pointer + 100_000 - 1);
 
         // Find null data in the database

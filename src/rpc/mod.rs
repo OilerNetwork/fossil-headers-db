@@ -474,7 +474,7 @@ impl EthereumRpcProvider for EthereumJsonRpcClient {
         };
 
         match self
-            .make_retrying_rpc_call::<_, BlockHeaderWithEmptyTransaction>(&params, timeout)
+            .make_retrying_rpc_call::<_, BlockHeader>(&params, timeout)
             .await
             .context("Failed to get latest block number")
         {
@@ -545,6 +545,7 @@ mod tests {
         use tokio::runtime::Builder;
 
         thread::spawn(move || {
+            // Using the current thread runtime to allow for a more linear test
             Builder::new_current_thread()
                 .enable_all()
                 .build()
@@ -553,9 +554,6 @@ mod tests {
                     let listener = TcpListener::bind(addr).await.unwrap();
 
                     let mut counter = 0;
-
-                    // Wait for a signal to return the response.
-                    // rx.recv().unwrap();
 
                     loop {
                         let (mut socket, _) = listener.accept().await.unwrap();

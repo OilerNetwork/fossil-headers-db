@@ -65,7 +65,6 @@ pub async fn start_indexing_services(
             info!("[router] shutting down");
             Ok(())
         })?;
-
     // Start the quick indexer
     let quick_indexer = QuickIndexer::new(
         QuickIndexConfig {
@@ -119,7 +118,6 @@ pub async fn start_indexing_services(
             }
             Ok(())
         })?;
-
     // Wait for termination, which will join all the handles.
     wait_for_thread_completion(vec![
         router_handle,
