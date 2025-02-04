@@ -9,16 +9,19 @@ use tracing::info;
 
 use tokio::{net::TcpListener, time::sleep};
 
-use crate::db::check_db_connection;
+use crate::db::DbConnection;
 
 mod handlers;
 
-pub async fn initialize_router(should_terminate: Arc<AtomicBool>) -> Result<()> {
+pub async fn initialize_router(
+    db: Arc<DbConnection>,
+    should_terminate: Arc<AtomicBool>,
+) -> Result<()> {
     let app = Router::new().route(
         "/",
-        get(|| async {
+        get(|| async move {
             // Check db connection here in health check.
-            let db_check = check_db_connection().await;
+            let db_check = db.check_db_connection().await;
             if db_check.is_err() {
                 return (StatusCode::INTERNAL_SERVER_ERROR, "Db connection failed");
             }
