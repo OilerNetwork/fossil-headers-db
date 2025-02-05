@@ -1,6 +1,6 @@
 use std::{
     sync::{atomic::AtomicBool, Arc},
-    thread::{self, JoinHandle},
+    // thread::{self, JoinHandle},
 };
 
 use crate::{
@@ -16,6 +16,7 @@ use crate::{
     rpc::{EthereumJsonRpcClient, EthereumRpcProvider},
 };
 use eyre::{eyre, Result};
+use tokio::task::JoinHandle;
 use tracing::{error, info};
 
 #[derive(Debug)]
@@ -52,19 +53,16 @@ pub async fn start_indexing_services(
     let router_terminator = Arc::clone(&should_terminate);
 
     // Setup the router which allows us to query health status and operations
-    let router_handle = thread::Builder::new()
-        .name("[router]".to_owned())
-        .spawn(move || {
-            let rt = tokio::runtime::Runtime::new()?;
+    let router_handle = tokio::spawn(async move {
+        if let Err(e) = router::initialize_router(router_terminator.clone()).await {
+            error!("[router] unexpected error {}", e);
+        }
 
-            info!("Starting router");
-            if let Err(e) = rt.block_on(router::initialize_router(router_terminator.clone())) {
-                error!("[router] unexpected error {}", e);
-            }
+        info!("[router] shutting down");
 
-            info!("[router] shutting down");
-            Ok(())
-        })?;
+        Ok(())
+    });
+
     // Start the quick indexer
     let quick_indexer = QuickIndexer::new(
         QuickIndexConfig {
@@ -80,17 +78,13 @@ pub async fn start_indexing_services(
     )
     .await;
 
-    let quick_indexer_handle = thread::Builder::new()
-        .name("[quick_index]".to_owned())
-        .spawn(move || {
-            let rt = tokio::runtime::Runtime::new()?;
-
-            info!("Starting quick indexer");
-            if let Err(e) = rt.block_on(quick_indexer.index()) {
-                error!("[quick_index] unexpected error {}", e);
-            }
-            Ok(())
-        })?;
+    let quick_indexer_handle = tokio::spawn(async move {
+        info!("Starting quick indexer");
+        if let Err(e) = quick_indexer.index().await {
+            error!("[quick_index] unexpected error {}", e);
+        }
+        Ok(())
+    });
 
     // Start the batch indexer
     let batch_indexer = BatchIndexer::new(
@@ -107,23 +101,20 @@ pub async fn start_indexing_services(
     )
     .await;
 
-    let batch_indexer_handle = thread::Builder::new()
-        .name("[batch_index]".to_owned())
-        .spawn(move || {
-            let rt = tokio::runtime::Runtime::new()?;
-
-            info!("Starting batch indexer");
-            if let Err(e) = rt.block_on(batch_indexer.index()) {
-                error!("[batch_index] unexpected error {}", e);
-            }
-            Ok(())
-        })?;
+    let batch_indexer_handle = tokio::spawn(async move {
+        info!("Starting batch indexer");
+        if let Err(e) = batch_indexer.index().await {
+            error!("[batch_index] unexpected error {}", e);
+        }
+        Ok(())
+    });
     // Wait for termination, which will join all the handles.
     wait_for_thread_completion(vec![
         router_handle,
         quick_indexer_handle,
         batch_indexer_handle,
-    ])?;
+    ])
+    .await?;
 
     Ok(())
 }
@@ -148,9 +139,9 @@ async fn initialize_index_metadata(
     Err(eyre!("Failed to get indexer metadata"))
 }
 
-fn wait_for_thread_completion(handles: Vec<JoinHandle<Result<()>>>) -> Result<()> {
+async fn wait_for_thread_completion(handles: Vec<JoinHandle<Result<()>>>) -> Result<()> {
     for handle in handles {
-        match handle.join() {
+        match handle.await {
             Ok(Ok(())) => {
                 info!("Thread completed successfully");
             }
