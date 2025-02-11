@@ -16,10 +16,6 @@ WORKDIR /usr/app
 # Copy the compiled binary
 COPY --from=builder /usr/app/target/release/fossil_headers_db .
 
-# Copy the run.sh script from the build context
-COPY run.sh /usr/app/run.sh
-RUN chmod +x /usr/app/run.sh
-
 EXPOSE 8080
 
-CMD ["/usr/app/run.sh"]
+CMD ["/usr/app/fossil_headers_db", "fix"]
