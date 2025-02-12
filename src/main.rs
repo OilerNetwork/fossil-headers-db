@@ -1,93 +1,50 @@
-use fossil_headers_db as _;
-
-mod commands;
-mod db;
-mod repositories;
-mod router;
-mod rpc;
-mod utils;
-
-use clap::{Parser, ValueEnum};
-use core::cmp::min;
 use eyre::{Context, Result};
-use futures::future::join;
-use std::sync::atomic::{AtomicBool, Ordering};
-use std::sync::Arc;
-use tracing::{info, warn};
-use tracing_subscriber::{fmt, EnvFilter};
-
-#[derive(Parser)]
-#[command(version, about, long_about = None)]
-struct Cli {
-    /// What mode to run the program in
-    #[arg(value_enum)]
-    mode: Mode,
-
-    /// Start block number
-    #[arg(short, long)]
-    start: Option<i64>,
-
-    /// End block number
-    #[arg(short, long)]
-    end: Option<i64>,
-
-    /// Number of threads (Max = 1000)
-    #[arg(short, long, default_value_t = db::DB_MAX_CONNECTIONS)]
-    loopsize: u32,
-}
-
-#[derive(Copy, Clone, PartialEq, Eq, ValueEnum)]
-enum Mode {
-    Fix,
-    Update,
-}
+use fossil_headers_db::indexer::lib::{start_indexing_services, IndexingConfig};
+use std::{
+    env,
+    sync::{
+        atomic::{AtomicBool, Ordering},
+        Arc,
+    },
+};
+use tracing::info;
+use tracing_subscriber::fmt;
 
 #[tokio::main]
-async fn main() -> Result<()> {
-    dotenvy::dotenv().ok();
+pub async fn main() -> Result<()> {
+    if env::var("IS_DEV").is_ok_and(|v| v.parse().unwrap_or(false)) {
+        dotenvy::dotenv()?;
+    }
+
+    let db_conn_string =
+        env::var("DB_CONNECTION_STRING").context("DB_CONNECTION_STRING must be set")?;
+    let node_conn_string =
+        env::var("NODE_CONNECTION_STRING").context("NODE_CONNECTION_STRING not set")?;
+
+    let should_index_txs = env::var("INDEX_TRANSACTIONS")
+        .unwrap_or_else(|_| "false".to_string())
+        .parse::<bool>()
+        .context("INDEX_TRANSACTIONS must be set")?;
 
     // Initialize tracing subscriber
-    fmt().with_env_filter(EnvFilter::from_default_env()).init();
+    fmt().init();
 
-    info!("Starting Indexer");
-
-    let cli = Cli::parse();
     let should_terminate = Arc::new(AtomicBool::new(false));
-    let terminate_clone = should_terminate.clone();
 
     setup_ctrlc_handler(Arc::clone(&should_terminate))?;
 
-    let router = async {
-        let res = router::initialize_router(should_terminate.clone()).await;
-        match res {
-            Ok(()) => info!("Router task completed"),
-            Err(e) => warn!("Router task failed: {:?}", e),
-        };
+    let indexing_config = IndexingConfig {
+        db_conn_string,
+        node_conn_string,
+        should_index_txs,
+        max_retries: 10,
+        poll_interval: 10,
+        rpc_timeout: 300,
+        rpc_max_retries: 5,
+        index_batch_size: 100, // larger size if we are indexing headers only
     };
 
-    let updater = async {
-        let res = match cli.mode {
-            Mode::Fix => {
-                commands::fill_gaps(cli.start, cli.end, Arc::clone(&terminate_clone)).await
-            }
-            Mode::Update => {
-                commands::update_from(
-                    cli.start,
-                    cli.end,
-                    min(cli.loopsize, db::DB_MAX_CONNECTIONS),
-                    Arc::clone(&terminate_clone),
-                )
-                .await
-            }
-        };
-
-        match res {
-            Ok(()) => info!("Updater task completed"),
-            Err(e) => warn!("Updater task failed: {:?}", e),
-        };
-    };
-
-    let _ = join(router, updater).await;
+    start_indexing_services(indexing_config, should_terminate).await?;
 
     Ok(())
 }

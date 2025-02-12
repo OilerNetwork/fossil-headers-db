@@ -50,11 +50,12 @@ pub async fn start_indexing_services(
     info!("Starting Indexer");
     // Start by checking and updating the current status in the db.
     initialize_index_metadata(db.clone(), rpc_client.clone()).await?;
+    let db_clone = Arc::clone(&db);
     let router_terminator = Arc::clone(&should_terminate);
 
     // Setup the router which allows us to query health status and operations
     let router_handle = tokio::spawn(async move {
-        if let Err(e) = router::initialize_router(router_terminator.clone()).await {
+        if let Err(e) = router::initialize_router(db_clone, router_terminator).await {
             error!("[router] unexpected error {}", e);
         }
 
