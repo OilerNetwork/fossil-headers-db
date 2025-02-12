@@ -1,4 +1,4 @@
-use crate::utils::convert_hex_string_to_i64;
+use crate::utils::{convert_hex_string_to_i64, make_retrying_call};
 use eyre::{eyre, Context, Result};
 use serde::{Deserialize, Serialize};
 use std::{future::Future, time::Duration};
@@ -189,35 +189,6 @@ impl EthereumJsonRpcClient {
             }
         }
     }
-
-    async fn make_retrying_rpc_call<
-        T: Serialize + Send + Sync + Clone,
-        R: for<'de> Deserialize<'de> + Send,
-    >(
-        &self,
-        params: T,
-        timeout: Option<u64>,
-    ) -> Result<R> {
-        let mut attempts = 0;
-        loop {
-            match self.make_rpc_call(params.clone(), timeout).await {
-                Ok(result) => return Ok(result),
-                Err(e) => {
-                    attempts += 1;
-                    if attempts > self.max_retries {
-                        warn!("Operation failed with error: {:?}. Max retries reached", e);
-                        return Err(e);
-                    }
-                    let backoff = Duration::from_secs(2_u64.pow(attempts));
-                    warn!(
-                        "Operation failed with error: {:?}. Retrying in {:?} (Attempt {}/{})",
-                        e, backoff, attempts, self.max_retries
-                    );
-                    sleep(backoff).await;
-                }
-            }
-        }
-    }
 }
 
 impl EthereumRpcProvider for EthereumJsonRpcClient {
@@ -229,10 +200,13 @@ impl EthereumRpcProvider for EthereumJsonRpcClient {
             params: ("finalized", false),
         };
 
-        match self
-            .make_retrying_rpc_call::<_, BlockHeader>(&params, timeout)
-            .await
-            .context("Failed to get latest block number")
+        match make_retrying_call(
+            || async { self.make_rpc_call::<_, BlockHeader>(&params, timeout).await },
+            self.max_retries,
+            "eth_getBlockByNumber",
+        )
+        .await
+        .context("Failed to get latest block number")
         {
             Ok(blockheader) => Ok(convert_hex_string_to_i64(&blockheader.number)?),
             Err(e) => Err(e),
@@ -252,8 +226,12 @@ impl EthereumRpcProvider for EthereumJsonRpcClient {
             params: (format!("0x{:x}", number), include_tx),
         };
 
-        self.make_retrying_rpc_call::<_, BlockHeader>(&params, timeout)
-            .await
+        make_retrying_call(
+            || async { self.make_rpc_call::<_, BlockHeader>(&params, timeout).await },
+            self.max_retries,
+            "eth_getBlockByNumber",
+        )
+        .await
     }
 }
 
