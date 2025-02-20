@@ -1,9 +1,9 @@
 version: '3.8'
 
 services:
-  update:
+  indexer:
     build:
-      dockerfile: Dockerfile.update
+      dockerfile: Dockerfile.indexer
       context: .
     ports:
       - "8082:8080"  # Sepolia-specific port
@@ -14,22 +14,6 @@ services:
       - NODE_CONNECTION_STRING=${NODE_CONNECTION_STRING}
       - ROUTER_ENDPOINT=${ROUTER_ENDPOINT}
       - RUST_LOG=info
-    depends_on:
-      db:
-        condition: service_healthy
-
-  fix:
-    build:
-      dockerfile: Dockerfile.fix
-      context: .
-    networks:
-      - sepolia_network
-    environment:
-      - DB_CONNECTION_STRING=${DB_CONNECTION_STRING}
-      - NODE_CONNECTION_STRING=${NODE_CONNECTION_STRING}
-      - ROUTER_ENDPOINT=${ROUTER_ENDPOINT}
-      - RUST_LOG=info
-      - INTERVAL=${FIX_INTERVAL:-300}
     depends_on:
       db:
         condition: service_healthy

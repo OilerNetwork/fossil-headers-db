@@ -7,7 +7,6 @@ use tracing::error;
 use crate::db::DbConnection;
 
 #[derive(Debug, Deserialize, sqlx::FromRow)]
-#[allow(dead_code)]
 pub struct IndexMetadataDto {
     pub id: i64,
     pub current_latest_block_number: i64,
@@ -17,8 +16,6 @@ pub struct IndexMetadataDto {
     pub backfilling_block_number: Option<i64>,
 }
 
-// TODO: allow dead code for now. Adding tests in future PRs should allow us to remove this.
-#[allow(dead_code)]
 pub async fn get_index_metadata(db: Arc<DbConnection>) -> Result<Option<IndexMetadataDto>> {
     let db = db.as_ref();
     let result: Result<IndexMetadataDto, sqlx::Error> = sqlx::query_as(
@@ -50,7 +47,6 @@ pub async fn get_index_metadata(db: Arc<DbConnection>) -> Result<Option<IndexMet
     Ok(result)
 }
 
-#[allow(dead_code)]
 pub async fn set_is_backfilling(
     db_tx: &mut sqlx::Transaction<'_, Postgres>,
     is_backfilling: bool,
@@ -69,7 +65,6 @@ pub async fn set_is_backfilling(
     Ok(())
 }
 
-#[allow(dead_code)]
 pub async fn set_initial_indexing_status(
     db: Arc<DbConnection>,
     current_latest_block_number: i64,
@@ -137,7 +132,6 @@ pub async fn set_initial_indexing_status(
     Ok(())
 }
 
-#[allow(dead_code)]
 pub async fn update_latest_quick_index_block_number_query(
     db_tx: &mut sqlx::Transaction<'_, Postgres>,
     block_number: i64,
@@ -156,7 +150,6 @@ pub async fn update_latest_quick_index_block_number_query(
     Ok(())
 }
 
-#[allow(dead_code)]
 pub async fn update_backfilling_block_number_query(
     db_tx: &mut sqlx::Transaction<'_, Postgres>,
     block_number: i64,
