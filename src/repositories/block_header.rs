@@ -46,6 +46,7 @@ pub struct BlockHeaderDto {
     pub blob_gas_used: Option<String>,
     pub excess_blob_gas: Option<String>,
     pub parent_beacon_block_root: Option<String>,
+    pub requests_hash: Option<String>,
 }
 
 fn convert_rpc_blockheader_to_dto(block_header: BlockHeader) -> Result<BlockHeaderDto> {
@@ -92,6 +93,7 @@ fn convert_rpc_blockheader_to_dto(block_header: BlockHeader) -> Result<BlockHead
         receipts_root,
         state_root,
         transaction_root,
+        requests_hash: block_header.requests_hash.clone(),
     })
 }
 
@@ -144,7 +146,7 @@ pub async fn insert_block_header_query(
                 nonce, transaction_root, receipts_root, state_root,
                 parent_hash, miner, logs_bloom, difficulty, totalDifficulty,
                 sha3_uncles, timestamp, extra_data, mix_hash, withdrawals_root,
-                blob_gas_used, excess_blob_gas, parent_beacon_block_root
+                blob_gas_used, excess_blob_gas, parent_beacon_block_root, requests_hash
             )",
     );
 
@@ -173,7 +175,8 @@ pub async fn insert_block_header_query(
                 .push_bind(&block_header.withdrawals_root)
                 .push_bind(&block_header.blob_gas_used)
                 .push_bind(&block_header.excess_blob_gas)
-                .push_bind(&block_header.parent_beacon_block_root);
+                .push_bind(&block_header.parent_beacon_block_root)
+                .push_bind(&block_header.requests_hash);
         },
     );
 
@@ -201,7 +204,8 @@ pub async fn insert_block_header_query(
                 withdrawals_root = EXCLUDED.withdrawals_root,
                 blob_gas_used = EXCLUDED.blob_gas_used,
                 excess_blob_gas = EXCLUDED.excess_blob_gas,
-                parent_beacon_block_root = EXCLUDED.parent_beacon_block_root;"#,
+                parent_beacon_block_root = EXCLUDED.parent_beacon_block_root,
+                requests_hash = EXCLUDED.requests_hash;"#,
     );
 
     query_builder.build().execute(&mut **db_tx).await?;
@@ -286,7 +290,7 @@ pub async fn insert_block_header_only_query(
                 nonce, transaction_root, receipts_root, state_root,
                 parent_hash, miner, logs_bloom, difficulty, totalDifficulty,
                 sha3_uncles, timestamp, extra_data, mix_hash, withdrawals_root,
-                blob_gas_used, excess_blob_gas, parent_beacon_block_root
+                blob_gas_used, excess_blob_gas, parent_beacon_block_root, requests_hash
             )",
     );
 
@@ -315,7 +319,8 @@ pub async fn insert_block_header_only_query(
                 .push_bind(&block_header.withdrawals_root)
                 .push_bind(&block_header.blob_gas_used)
                 .push_bind(&block_header.excess_blob_gas)
-                .push_bind(&block_header.parent_beacon_block_root);
+                .push_bind(&block_header.parent_beacon_block_root)
+                .push_bind(&block_header.requests_hash);
         },
     );
 
@@ -343,7 +348,8 @@ pub async fn insert_block_header_only_query(
                 withdrawals_root = EXCLUDED.withdrawals_root,
                 blob_gas_used = EXCLUDED.blob_gas_used,
                 excess_blob_gas = EXCLUDED.excess_blob_gas,
-                parent_beacon_block_root = EXCLUDED.parent_beacon_block_root;"#,
+                parent_beacon_block_root = EXCLUDED.parent_beacon_block_root,
+                requests_hash = EXCLUDED.requests_hash;"#,
     );
 
     query_builder.build().execute(&mut **db_tx).await?;
@@ -391,6 +397,7 @@ mod tests {
             header1.parent_beacon_block_root,
             header2.parent_beacon_block_root
         );
+        assert_eq!(header1.requests_hash, header2.requests_hash);
     }
 
     fn assert_transactions_eq(transaction1: TransactionDto, transaction2: TransactionDto) {
@@ -431,6 +438,26 @@ mod tests {
         vec![
             block_21598014_response.result,
             block_21598015_response.result,
+        ]
+    }
+
+    async fn get_pectra_upgrade_fixtures() -> Vec<BlockHeader> {
+        let block_7836330 =
+            fs::read_to_string("tests/fixtures/eth_getBlockByNumber_sepolia_7836330.json")
+                .await
+                .unwrap();
+        let block_7836331 =
+            fs::read_to_string("tests/fixtures/eth_getBlockByNumber_sepolia_7836331.json")
+                .await
+                .unwrap();
+
+        vec![
+            serde_json::from_str::<RpcResponse<BlockHeader>>(&block_7836330)
+                .unwrap()
+                .result,
+            serde_json::from_str::<RpcResponse<BlockHeader>>(&block_7836331)
+                .unwrap()
+                .result,
         ]
     }
 
@@ -832,6 +859,50 @@ mod tests {
         let block_header_to_compare =
             convert_rpc_blockheader_to_dto(same_block_header_with_diff_values.clone()).unwrap();
         let block_header_in_db = result.unwrap();
+        assert_block_header_eq(block_header_in_db, block_header_to_compare);
+
+        tx.rollback().await.unwrap();
+    }
+
+    #[tokio::test]
+    async fn test_insert_pectra_upgrade_block_header_success() {
+        let url = get_test_db_connection();
+        let db = DbConnection::new(url).await.unwrap();
+
+        let block_headers = get_pectra_upgrade_fixtures().await;
+
+        let mut tx = db.pool.begin().await.unwrap();
+
+        // Insert both the blocks
+        insert_block_header_only_query(&mut tx, block_headers.clone())
+            .await
+            .unwrap();
+
+        // Check if both the blocks are inserted correctly, with the correct requests_hash
+        let result: Result<BlockHeaderDto, sqlx::Error> =
+            sqlx::query_as("SELECT * FROM blockheaders WHERE number = $1")
+                .bind(convert_hex_string_to_i64(&block_headers[0].number).unwrap())
+                .fetch_one(&mut *tx)
+                .await;
+        assert!(result.is_ok());
+        let block_header_to_compare =
+            convert_rpc_blockheader_to_dto(block_headers[0].clone()).unwrap();
+        let block_header_in_db = result.unwrap();
+        // Right before the Pectra upgrade, the requests_hash is None
+        assert!(block_header_in_db.requests_hash.is_none());
+        assert_block_header_eq(block_header_in_db, block_header_to_compare);
+
+        let result: Result<BlockHeaderDto, sqlx::Error> =
+            sqlx::query_as("SELECT * FROM blockheaders WHERE number = $1")
+                .bind(convert_hex_string_to_i64(&block_headers[1].number).unwrap())
+                .fetch_one(&mut *tx)
+                .await;
+        assert!(result.is_ok());
+        let block_header_to_compare =
+            convert_rpc_blockheader_to_dto(block_headers[1].clone()).unwrap();
+        let block_header_in_db = result.unwrap();
+        // After the Pectra upgrade, the requests_hash should exists now.
+        assert!(block_header_in_db.requests_hash.is_some());
         assert_block_header_eq(block_header_in_db, block_header_to_compare);
 
         tx.rollback().await.unwrap();

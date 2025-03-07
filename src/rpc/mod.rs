@@ -100,6 +100,8 @@ pub struct BlockHeader {
     pub excess_blob_gas: Option<String>,
     #[serde(rename = "parentBeaconBlockRoot")]
     pub parent_beacon_block_root: Option<String>,
+    #[serde(rename = "requestsHash")]
+    pub requests_hash: Option<String>,
 }
 
 pub trait EthereumRpcProvider {
@@ -311,6 +313,26 @@ mod tests {
             serde_json::from_str::<RpcResponse<BlockHeader>>(&block_21598014_string).unwrap();
 
         block_21598014_response.result
+    }
+
+    async fn get_fixture_for_pectra_upgrade_tests() -> (BlockHeader, BlockHeader) {
+        let block_7836330 =
+            fs::read_to_string("tests/fixtures/eth_getBlockByNumber_sepolia_7836330.json")
+                .await
+                .unwrap();
+
+        let block_7836330_response =
+            serde_json::from_str::<RpcResponse<BlockHeader>>(&block_7836330).unwrap();
+
+        let block_7836331_string =
+            fs::read_to_string("tests/fixtures/eth_getBlockByNumber_sepolia_7836331.json")
+                .await
+                .unwrap();
+
+        let block_7836331_response =
+            serde_json::from_str::<RpcResponse<BlockHeader>>(&block_7836331_string).unwrap();
+
+        (block_7836330_response.result, block_7836331_response.result)
     }
 
     // Helper function to start a TCP server that returns predefined JSON-RPC responses
@@ -642,5 +664,33 @@ mod tests {
         );
     }
 
+    #[tokio::test]
+    async fn test_get_full_block_by_number_with_pectra_upgrade() {
+        let (before_pectra_block, after_pectra_block) =
+            get_fixture_for_pectra_upgrade_tests().await;
+        start_mock_rpc_server(
+            "127.0.0.1:8097".to_owned(),
+            vec![
+                Some(before_pectra_block.clone()),
+                Some(after_pectra_block.clone()),
+            ],
+        );
+        let client = EthereumJsonRpcClient::new("http://127.0.0.1:8097".to_owned(), 1);
+
+        // Check before pectra upgrade block.
+        let block = client.get_full_block_by_number(7836330, true, None);
+        let block = block.await.unwrap();
+        assert_eq!(block.hash, before_pectra_block.hash);
+        assert_eq!(block.number, before_pectra_block.number);
+        assert!(block.requests_hash.is_none());
+
+        // Check after pectra upgrade block.
+        let block = client.get_full_block_by_number(7836331, true, None);
+
+        let block = block.await.unwrap();
+        assert_eq!(block.hash, after_pectra_block.hash);
+        assert_eq!(block.number, after_pectra_block.number);
+        assert_eq!(block.requests_hash, after_pectra_block.requests_hash);
+    }
     // TODO: Add more tests for the failure cases.
 }
