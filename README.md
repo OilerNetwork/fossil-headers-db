@@ -47,12 +47,6 @@ This step by step guide utilizes docker in order to simplify the setup process f
 git clone https://github.com/OilerNetwork/fossil-headers-db.git
 ```
 
-Since we these changes are currently in a branch, you'll also have to checkout in order to be at the correct branch.
-
-```sh
-git checkout chore/add-readme
-```
-
 ### 2. Configure your application
 
 Now we can configure your application via editing the `.env` file.
