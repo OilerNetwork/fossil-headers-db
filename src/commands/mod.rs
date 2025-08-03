@@ -81,19 +81,34 @@ async fn fill_null_rows(
             );
 
             // Logic from process_missing_block
+            let mut block_retrieved = false;
             for i in 0..MAX_RETRIES {
                 match rpc::get_full_block_by_number(null_data_block_number, Some(TIMEOUT)).await {
                     Ok(block) => {
                         db::write_blockheader(block).await?;
                         info!("[fill_gaps] Successfully wrote block {null_data_block_number} after {i} retries");
                         range_start_pointer = null_data_block_number + 1;
+                        block_retrieved = true;
+                        break;
                     }
                     Err(e) => {
-                        warn!("[fill_gaps] Error retrieving block {null_data_block_number}: {e}")
+                        warn!("[fill_gaps] Error retrieving block {null_data_block_number} (attempt {}/{}): {e}", i + 1, MAX_RETRIES);
+                        if i == MAX_RETRIES - 1 {
+                            // Last attempt failed - this is a critical error for gap filling
+                            return Err(e.wrap_err(format!("Failed to retrieve block {null_data_block_number} after {MAX_RETRIES} attempts during gap filling")));
+                        }
                     }
                 }
-                let backoff: u64 = (i).pow(2) * 5;
+                let backoff: u64 = (i + 1).pow(2) * 5;
                 tokio::time::sleep(Duration::from_secs(backoff)).await;
+            }
+
+            if !block_retrieved {
+                return Err(eyre::eyre!(
+                    "Failed to retrieve block {} after {} attempts",
+                    null_data_block_number,
+                    MAX_RETRIES
+                ));
             }
         }
     }
@@ -101,6 +116,7 @@ async fn fill_null_rows(
 }
 
 async fn process_missing_block(block_number: i64, range_start_pointer: &mut i64) -> Result<bool> {
+    let mut last_error = None;
     for i in 0..MAX_RETRIES {
         match rpc::get_full_block_by_number(block_number, Some(TIMEOUT)).await {
             Ok(block) => {
@@ -109,13 +125,31 @@ async fn process_missing_block(block_number: i64, range_start_pointer: &mut i64)
                 info!("[fill_gaps] Successfully wrote block {block_number} after {i} retries");
                 return Ok(true);
             }
-            Err(e) => warn!("[fill_gaps] Error retrieving block {block_number}: {e}"),
+            Err(e) => {
+                warn!(
+                    "[fill_gaps] Error retrieving block {block_number} (attempt {}/{}): {e}",
+                    i + 1,
+                    MAX_RETRIES
+                );
+                last_error = Some(e);
+            }
         }
-        let backoff: u64 = (i).pow(2) * 5;
+        let backoff: u64 = (i + 1).pow(2) * 5;
         tokio::time::sleep(Duration::from_secs(backoff)).await;
     }
-    error!("[fill_gaps] Error with block number {}", block_number);
-    Ok(false)
+
+    // All retries failed - return the error instead of silently continuing
+    if let Some(e) = last_error {
+        Err(e.wrap_err(format!(
+            "Failed to retrieve block {block_number} after {MAX_RETRIES} attempts"
+        )))
+    } else {
+        Err(eyre::eyre!(
+            "Failed to retrieve block {} after {} attempts (no error captured)",
+            block_number,
+            MAX_RETRIES
+        ))
+    }
 }
 
 async fn get_range_end(end: Option<i64>) -> Result<i64> {

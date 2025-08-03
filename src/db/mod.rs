@@ -227,6 +227,32 @@ pub async fn write_blockheader(block_header: BlockHeaderWithFullTransaction) -> 
 
     // Insert transactions
     if !block_header.transactions.is_empty() {
+        // Pre-process transactions to handle hex conversions with proper error handling
+        let processed_transactions: Result<Vec<_>> = block_header
+            .transactions
+            .iter()
+            .map(|tx| {
+                let tx_block_number =
+                    convert_hex_string_to_i64(&tx.block_number).with_context(|| {
+                        format!(
+                            "Invalid block number format in transaction {}: {}",
+                            tx.hash, tx.block_number
+                        )
+                    })?;
+                let tx_index =
+                    convert_hex_string_to_i64(&tx.transaction_index).with_context(|| {
+                        format!(
+                            "Invalid transaction index format in transaction {}: {}",
+                            tx.hash, tx.transaction_index
+                        )
+                    })?;
+
+                Ok((tx, tx_block_number, tx_index))
+            })
+            .collect();
+
+        let processed_transactions = processed_transactions?;
+
         let mut query_builder: QueryBuilder<Postgres> = QueryBuilder::new(
             "INSERT INTO transactions (
                 block_number, transaction_hash, transaction_index,
@@ -236,16 +262,11 @@ pub async fn write_blockheader(block_header: BlockHeaderWithFullTransaction) -> 
         );
 
         query_builder.push_values(
-            block_header.transactions.iter(),
-            |mut b: Separated<'_, '_, Postgres, &'static str>, tx| {
-                // Convert values and unwrap_or_default() to handle errors
-                let tx_block_number =
-                    convert_hex_string_to_i64(&tx.block_number).unwrap_or_default();
-                let tx_index = convert_hex_string_to_i64(&tx.transaction_index).unwrap_or_default();
-
-                b.push_bind(tx_block_number)
+            processed_transactions.iter(),
+            |mut b: Separated<'_, '_, Postgres, &'static str>, (tx, tx_block_number, tx_index)| {
+                b.push_bind(*tx_block_number)
                     .push_bind(&tx.hash)
-                    .push_bind(tx_index)
+                    .push_bind(*tx_index)
                     .push_bind(&tx.from)
                     .push_bind(&tx.to)
                     .push_bind(&tx.value)

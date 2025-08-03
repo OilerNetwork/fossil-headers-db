@@ -153,17 +153,16 @@ pub async fn get_latest_finalized_blocknumber(timeout: Option<u64>) -> Result<i6
         params: ("finalized", false),
     };
 
-    match make_retrying_rpc_call::<_, BlockHeaderWithEmptyTransaction>(
+    let blockheader = make_retrying_rpc_call::<_, BlockHeaderWithEmptyTransaction>(
         &params,
         timeout,
         MAX_RETRIES.into(),
     )
     .await
-    .context("Failed to get latest block number")
-    {
-        Ok(blockheader) => Ok(convert_hex_string_to_i64(&blockheader.number)?),
-        Err(e) => Err(e),
-    }
+    .context("Failed to get latest finalized block number")?;
+
+    convert_hex_string_to_i64(&blockheader.number)
+        .context("Invalid block number format in finalized block response")
 }
 
 pub async fn get_full_block_by_number(
@@ -174,7 +173,7 @@ pub async fn get_full_block_by_number(
         jsonrpc: "2.0",
         id: "0".to_string(),
         method: "eth_getBlockByNumber",
-        params: (format!("0x{:x}", number), true),
+        params: (format!("0x{number:x}"), true),
     };
 
     make_retrying_rpc_call::<_, BlockHeaderWithFullTransaction>(
@@ -198,7 +197,7 @@ pub async fn batch_get_full_block_by_number(
             jsonrpc: "2.0",
             id: num_str,
             method: "eth_getBlockByNumber",
-            params: (format!("0x{:x}", number), true),
+            params: (format!("0x{number:x}"), true),
         });
     }
     make_rpc_call::<_, Vec<BlockHeaderWithFullTransaction>>(&params, timeout).await
@@ -493,7 +492,7 @@ impl EthereumRpcProvider for EthereumJsonRpcClient {
             jsonrpc: "2.0",
             id: "0".to_string(),
             method: "eth_getBlockByNumber",
-            params: (format!("0x{:x}", number), include_tx),
+            params: (format!("0x{number:x}"), include_tx),
         };
 
         self.make_retrying_rpc_call::<_, BlockHeader>(&params, timeout)

@@ -1,19 +1,39 @@
 services:
+  migrations:
+    build:
+      dockerfile: Dockerfile.indexer
+      context: .
+    networks:
+      - local_network
+    environment:
+      - DATABASE_URL=postgres://postgres:postgres@db:5432/postgres
+    depends_on:
+      db:
+        condition: service_healthy
+    command: ["sh", "-c", "cd /usr/app && ./scripts/run-migrations.sh"]
+    volumes:
+      - ./scripts:/usr/app/scripts
+      - ./migrations:/usr/app/migrations
+  
   indexer:
     build:
       dockerfile: Dockerfile.indexer
       context: .
     ports:
-      - "5050:5050"
+      - "3000:3000"
     networks:
       - local_network
     environment:
       - DB_CONNECTION_STRING=postgres://postgres:postgres@db:5432/postgres
-      - NODE_CONNECTION_STRING=${NODE_CONNECTION_STRING}
-      - ROUTER_ENDPOINT=${ROUTER_ENDPOINT}
+      - NODE_CONNECTION_STRING=${NODE_CONNECTION_STRING:-https://sepolia.infura.io/v3/your-api-key}
+      - ROUTER_ENDPOINT=0.0.0.0:3000
+      - INDEX_TRANSACTIONS=false
+      - RUST_LOG=debug
     depends_on:
       db:
         condition: service_healthy
+      migrations:
+        condition: service_completed_successfully
   db:
     image: postgres:16-alpine
     environment:
