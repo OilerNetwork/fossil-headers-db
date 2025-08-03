@@ -1,6 +1,7 @@
+use crate::errors::{BlockchainError, Result};
 use crate::rpc::BlockHeaderWithFullTransaction;
+use crate::types::BlockNumber;
 use crate::utils::convert_hex_string_to_i64;
-use eyre::{Context, Error, Result};
 use futures::FutureExt;
 use sqlx::postgres::PgConnectOptions;
 use sqlx::query_builder::Separated;
@@ -21,32 +22,54 @@ pub async fn get_db_pool() -> Result<Arc<Pool<Postgres>>> {
         Ok(pool.clone())
     } else {
         let mut conn_options: PgConnectOptions = dotenvy::var("DB_CONNECTION_STRING")
-            .context("DB_CONNECTION_STRING must be set")?
-            .parse()?;
+            .map_err(|_| {
+                BlockchainError::configuration(
+                    "DB_CONNECTION_STRING",
+                    "Environment variable must be set",
+                )
+            })?
+            .parse()
+            .map_err(|e| {
+                BlockchainError::configuration(
+                    "DB_CONNECTION_STRING",
+                    format!("Invalid connection string: {e}"),
+                )
+            })?;
         conn_options = conn_options
             .log_slow_statements(tracing::log::LevelFilter::Debug, Duration::new(120, 0));
 
         let pool = PgPoolOptions::new()
             .max_connections(DB_MAX_CONNECTIONS)
             .connect_with(conn_options)
-            .await?;
+            .await
+            .map_err(|e| {
+                BlockchainError::database_connection(format!(
+                    "Failed to create connection pool: {e}"
+                ))
+            })?;
         let arc_pool = Arc::new(pool);
         match DB_POOL.set(arc_pool.clone()) {
             Ok(_) => Ok(arc_pool),
             Err(_) => DB_POOL
                 .get()
-                .ok_or_else(|| eyre::eyre!("Failed to get database pool after initialization"))
+                .ok_or_else(|| {
+                    BlockchainError::database_connection(
+                        "Failed to get database pool after initialization",
+                    )
+                })
                 .map(Clone::clone),
         }
     }
 }
 
 pub async fn check_db_connection() -> Result<()> {
-    let pool = get_db_pool().await.context("Failed to get database pool")?;
+    let pool = get_db_pool().await.map_err(|e| {
+        BlockchainError::database_connection(format!("Failed to get database pool: {e}"))
+    })?;
     sqlx::query("SELECT 1")
         .execute(&*pool)
         .await
-        .context("Failed to check database connection")?;
+        .map_err(|e| BlockchainError::database_query(format!("Connection check failed: {e}")))?;
     Ok(())
 }
 
@@ -55,20 +78,24 @@ pub async fn check_db_connection() -> Result<()> {
  *
  * @Returns blocknumber, else -1 if table is empty
  */
-pub async fn get_last_stored_blocknumber() -> Result<i64> {
+pub async fn get_last_stored_blocknumber() -> Result<BlockNumber> {
     const MAX_RETRIES: u32 = 3;
 
     retry_async(
         || {
             async {
-                let pool = get_db_pool().await.context("Failed to get database pool")?;
+                let pool = get_db_pool().await?;
                 let result: (i64,) =
                     sqlx::query_as("SELECT COALESCE(MAX(number), -1) FROM blockheaders")
                         .fetch_one(&*pool)
                         .await
-                        .context("Failed to get last stored block number")?;
+                        .map_err(|e| {
+                            BlockchainError::database_query(format!(
+                                "Failed to get last stored block number: {e}"
+                            ))
+                        })?;
 
-                Ok(result.0)
+                Ok(BlockNumber::from_trusted(result.0))
             }
             .boxed()
         },
@@ -80,8 +107,8 @@ pub async fn get_last_stored_blocknumber() -> Result<i64> {
 /**
  * Returns the first missing blocknumber in between provided numbers (inclusive)
  */
-pub async fn find_first_gap(start: i64, end: i64) -> Result<Option<i64>> {
-    let pool = get_db_pool().await.context("Failed to get database pool")?;
+pub async fn find_first_gap(start: BlockNumber, end: BlockNumber) -> Result<Option<BlockNumber>> {
+    let pool = get_db_pool().await?;
     let result: Option<(i64,)> = sqlx::query_as(
         r#"
         WITH RECURSIVE number_series(n) AS (
@@ -94,21 +121,21 @@ pub async fn find_first_gap(start: i64, end: i64) -> Result<Option<i64>> {
         LIMIT 1
         "#,
     )
-    .bind(start)
-    .bind(end)
+    .bind(start.value())
+    .bind(end.value())
     .fetch_optional(&*pool)
     .await
-    .context("Failed to find first gap")?;
+    .map_err(|e| BlockchainError::database_query(format!("Failed to find first gap: {e}")))?;
 
-    Ok(result.map(|r| r.0))
+    Ok(result.map(|r| BlockNumber::from_trusted(r.0)))
 }
 
 /**
  * This finds the null data by querying the blockheaders table.
  * Included fields is based on the reth primitives defined in https://reth.rs/docs/reth_primitives/struct.Header.html
  */
-pub async fn find_null_data(start: i64, end: i64) -> Result<Vec<i64>> {
-    let pool = get_db_pool().await.context("Failed to get database pool")?;
+pub async fn find_null_data(start: BlockNumber, end: BlockNumber) -> Result<Vec<BlockNumber>> {
+    let pool = get_db_pool().await?;
     let result: Vec<(i64,)> = sqlx::query_as(
         r#"
         SELECT number FROM blockheaders
@@ -130,13 +157,16 @@ pub async fn find_null_data(start: i64, end: i64) -> Result<Vec<i64>> {
             ORDER BY number ASC
         "#,
     )
-    .bind(start)
-    .bind(end)
+    .bind(start.value())
+    .bind(end.value())
     .fetch_all(&*pool)
     .await
-    .context("Failed to find any null data")?;
+    .map_err(|e| BlockchainError::database_query(format!("Failed to find any null data: {e}")))?;
 
-    Ok(result.iter().map(|row| row.0).collect())
+    Ok(result
+        .iter()
+        .map(|row| BlockNumber::from_trusted(row.0))
+        .collect())
 }
 
 pub async fn write_blockheader(block_header: BlockHeaderWithFullTransaction) -> Result<()> {
@@ -206,10 +236,9 @@ pub async fn write_blockheader(block_header: BlockHeaderWithFullTransaction) -> 
     .bind(&block_header.parent_beacon_block_root)
     .execute(&mut *tx) // Changed this line
     .await
-    .with_context(|| format!("Failed to insert block header for block number: {}", block_header.number))
     .map_err(|e| {
         error!("Detailed error: {:?}", e);
-        e
+        BlockchainError::database_query(format!("Failed to insert block header for block number {}: {}", block_header.number, e))
     })?;
 
     if result.rows_affected() == 0 {
@@ -232,20 +261,10 @@ pub async fn write_blockheader(block_header: BlockHeaderWithFullTransaction) -> 
             .transactions
             .iter()
             .map(|tx| {
-                let tx_block_number =
-                    convert_hex_string_to_i64(&tx.block_number).with_context(|| {
-                        format!(
-                            "Invalid block number format in transaction {}: {}",
-                            tx.hash, tx.block_number
-                        )
-                    })?;
-                let tx_index =
-                    convert_hex_string_to_i64(&tx.transaction_index).with_context(|| {
-                        format!(
-                            "Invalid transaction index format in transaction {}: {}",
-                            tx.hash, tx.transaction_index
-                        )
-                    })?;
+                let tx_block_number = convert_hex_string_to_i64(&tx.block_number)
+                    .map_err(|_| BlockchainError::invalid_hex(&tx.block_number))?;
+                let tx_index = convert_hex_string_to_i64(&tx.transaction_index)
+                    .map_err(|_| BlockchainError::invalid_hex(&tx.transaction_index))?;
 
                 Ok((tx, tx_block_number, tx_index))
             })
@@ -281,10 +300,9 @@ pub async fn write_blockheader(block_header: BlockHeaderWithFullTransaction) -> 
         query_builder.push(" ON CONFLICT (transaction_hash) DO NOTHING");
 
         let query = query_builder.build();
-        let result = query
-            .execute(&mut *tx)
-            .await
-            .context("Failed to insert transactions")?;
+        let result = query.execute(&mut *tx).await.map_err(|e| {
+            BlockchainError::database_query(format!("Failed to insert transactions: {e}"))
+        })?;
 
         info!(
             "Inserted {} transactions for block {}",
@@ -293,13 +311,15 @@ pub async fn write_blockheader(block_header: BlockHeaderWithFullTransaction) -> 
         );
     }
 
-    tx.commit().await.context("Failed to commit transaction")?;
+    tx.commit().await.map_err(|e| {
+        BlockchainError::database_transaction(format!("Failed to commit transaction: {e}"))
+    })?;
     Ok(())
 }
 
-async fn retry_async<F, T>(mut operation: F, max_retries: u32) -> Result<T, Error>
+async fn retry_async<F, T>(mut operation: F, max_retries: u32) -> Result<T>
 where
-    F: FnMut() -> futures::future::BoxFuture<'static, Result<T, Error>>,
+    F: FnMut() -> futures::future::BoxFuture<'static, Result<T>>,
 {
     let mut attempts = 0;
     loop {
@@ -322,22 +342,14 @@ where
 }
 
 #[allow(clippy::all)]
-fn is_transient_error(e: &Error) -> bool {
-    // Check for database connection errors
-    if let Some(db_err) = e.downcast_ref::<sqlx::Error>() {
-        match db_err {
-            sqlx::Error::Io(_) | sqlx::Error::PoolTimedOut => true,
-            sqlx::Error::Database(db_err) => {
-                // Check database-specific error codes if needed
-                db_err.code().map_or(false, |code| {
-                    // Add database-specific error codes that are transient
-                    code == "57P01" // admin_shutdown, as an example
-                })
-            }
-            _ => false,
-        }
-    } else {
-        false
+fn is_transient_error(e: &BlockchainError) -> bool {
+    // Check for transient error types
+    match e {
+        BlockchainError::DatabaseConnectionFailed { .. } => true,
+        BlockchainError::RpcConnectionFailed { .. } => true,
+        BlockchainError::RpcTimeout { .. } => true,
+        BlockchainError::NetworkError { .. } => true,
+        _ => false,
     }
 }
 

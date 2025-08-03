@@ -23,15 +23,15 @@ This document outlines a priority-structured plan to apply Rust best practices f
 **Issue**: Generic error handling makes debugging and error recovery difficult
 
 **Tasks**:
-- [ ] Add `thiserror` dependency to `Cargo.toml`
-- [ ] Create `src/errors.rs` with blockchain-specific error types
-- [ ] Implement `BlockchainError` enum with variants for:
+- [x] Add `thiserror` dependency to `Cargo.toml`
+- [x] Create `src/errors.rs` with blockchain-specific error types
+- [x] Implement `BlockchainError` enum with variants for:
   - Invalid hex format errors
   - RPC connection failures  
   - Database transaction failures
   - Block not found errors
-- [ ] Update all modules to use domain-specific errors
-- [ ] Add error context throughout the codebase
+- [x] Update all modules to use domain-specific errors
+- [x] Add error context throughout the codebase
 
 **Success Criteria**: All errors are typed and provide clear context for debugging
 
@@ -41,14 +41,14 @@ This document outlines a priority-structured plan to apply Rust best practices f
 **Issue**: Critical domain concepts lack type safety, risk of parameter confusion
 
 **Tasks**:
-- [ ] Create `src/types.rs` with domain types:
+- [x] Create `src/types.rs` with domain types:
   - `BlockNumber(i64)` with validation
   - `BlockHash(String)` with hex validation
   - `TransactionHash(String)` with hex validation
   - `Address(String)` with address format validation
-- [ ] Update function signatures throughout codebase
-- [ ] Add validation logic in type constructors
-- [ ] Update database operations to use typed parameters
+- [x] Update function signatures throughout codebase
+- [x] Add validation logic in type constructors
+- [x] Update database operations to use typed parameters
 
 **Success Criteria**: Cannot accidentally pass wrong primitive types, compile-time prevention of common mistakes
 

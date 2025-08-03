@@ -2,14 +2,17 @@ use fossil_headers_db as _;
 
 mod commands;
 mod db;
+mod errors;
 mod repositories;
 mod router;
 mod rpc;
+mod types;
 mod utils;
 
+use crate::errors::{BlockchainError, Result};
+use crate::types::BlockNumber;
 use clap::{Parser, ValueEnum};
 use core::cmp::min;
-use eyre::{Context, Result};
 use futures::future::join;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
@@ -68,12 +71,16 @@ async fn main() -> Result<()> {
     let updater = async {
         let res = match cli.mode {
             Mode::Fix => {
-                commands::fill_gaps(cli.start, cli.end, Arc::clone(&terminate_clone)).await
+                let start = cli.start.map(BlockNumber::from_trusted);
+                let end = cli.end.map(BlockNumber::from_trusted);
+                commands::fill_gaps(start, end, Arc::clone(&terminate_clone)).await
             }
             Mode::Update => {
+                let start = cli.start.map(BlockNumber::from_trusted);
+                let end = cli.end.map(BlockNumber::from_trusted);
                 commands::update_from(
-                    cli.start,
-                    cli.end,
+                    start,
+                    end,
                     min(cli.loopsize, db::DB_MAX_CONNECTIONS),
                     Arc::clone(&terminate_clone),
                 )
@@ -98,5 +105,5 @@ fn setup_ctrlc_handler(should_terminate: Arc<AtomicBool>) -> Result<()> {
         info!("Waiting for current processes to finish...");
         should_terminate.store(true, Ordering::SeqCst);
     })
-    .context("Failed to set Ctrl+C handler")
+    .map_err(|e| BlockchainError::internal(format!("Failed to set Ctrl+C handler: {e}")))
 }

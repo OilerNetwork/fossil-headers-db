@@ -1,12 +1,13 @@
 use std::collections::VecDeque;
 
-use eyre::{eyre, Result};
+use crate::errors::{BlockchainError, Result};
 use tokio::sync::Mutex;
 
 use crate::rpc::{BlockHeader, EthereumRpcProvider};
+use crate::types::BlockNumber;
 
 pub struct MockRpcProvider {
-    pub latest_finalized_blocknumber_vec: Mutex<VecDeque<i64>>,
+    pub latest_finalized_blocknumber_vec: Mutex<VecDeque<BlockNumber>>,
     pub full_block_vec: Mutex<VecDeque<BlockHeader>>,
 }
 
@@ -25,7 +26,7 @@ impl MockRpcProvider {
     }
 
     pub fn new_with_data(
-        latest_finalized_blocknumber_vec: VecDeque<i64>,
+        latest_finalized_blocknumber_vec: VecDeque<BlockNumber>,
         full_block_vec: VecDeque<BlockHeader>,
     ) -> Self {
         Self {
@@ -36,7 +37,7 @@ impl MockRpcProvider {
 }
 
 impl EthereumRpcProvider for MockRpcProvider {
-    async fn get_latest_finalized_blocknumber(&self, _timeout: Option<u64>) -> Result<i64> {
+    async fn get_latest_finalized_blocknumber(&self, _timeout: Option<u64>) -> Result<BlockNumber> {
         if let Some(res) = self
             .latest_finalized_blocknumber_vec
             .lock()
@@ -45,18 +46,22 @@ impl EthereumRpcProvider for MockRpcProvider {
         {
             return Ok(res);
         }
-        Err(eyre!("Failed to get latest finalized block number"))
+        Err(BlockchainError::block_not_found(
+            "Failed to get latest finalized block number",
+        ))
     }
 
     async fn get_full_block_by_number(
         &self,
-        _number: i64,
+        _number: BlockNumber,
         _include_tx: bool,
         _timeout: Option<u64>,
     ) -> Result<BlockHeader> {
         if let Some(res) = self.full_block_vec.lock().await.pop_front() {
             return Ok(res);
         }
-        Err(eyre!("Failed to get full block by number"))
+        Err(BlockchainError::block_not_found(
+            "Failed to get full block by number",
+        ))
     }
 }

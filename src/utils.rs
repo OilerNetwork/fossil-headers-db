@@ -1,11 +1,13 @@
-use eyre::{Context, Result};
+use crate::errors::{BlockchainError, Result};
 
 pub fn convert_hex_string_to_i64(hex_string: &str) -> Result<i64> {
-    i64::from_str_radix(hex_string.trim_start_matches("0x"), 16).context("Invalid hex string")
+    i64::from_str_radix(hex_string.trim_start_matches("0x"), 16)
+        .map_err(|_| BlockchainError::invalid_hex(hex_string))
 }
 
 pub fn convert_hex_string_to_i32(hex_string: &str) -> Result<i32> {
-    i32::from_str_radix(hex_string.trim_start_matches("0x"), 16).context("Invalid hex string")
+    i32::from_str_radix(hex_string.trim_start_matches("0x"), 16)
+        .map_err(|_| BlockchainError::invalid_hex(hex_string))
 }
 
 #[cfg(test)]

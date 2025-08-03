@@ -20,6 +20,7 @@ use crate::{
         },
     },
     rpc::EthereumRpcProvider,
+    types::BlockNumber,
 };
 
 #[derive(Debug)]
@@ -156,7 +157,7 @@ where
                     task::spawn(async move {
                         provider
                             .get_full_block_by_number(
-                                block_number,
+                                BlockNumber::from_trusted(block_number),
                                 should_index_txs,
                                 Some(timeout.into()),
                             )

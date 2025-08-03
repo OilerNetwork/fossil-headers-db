@@ -1,5 +1,5 @@
-use crate::utils::convert_hex_string_to_i64;
-use eyre::{eyre, Context, Result};
+use crate::errors::{BlockchainError, Result};
+use crate::types::BlockNumber;
 use once_cell::sync::Lazy;
 use reqwest::Client;
 use serde::{Deserialize, Serialize};
@@ -144,7 +144,7 @@ pub struct BlockHeaderWithFullTransaction {
     pub parent_beacon_block_root: Option<String>,
 }
 
-pub async fn get_latest_finalized_blocknumber(timeout: Option<u64>) -> Result<i64> {
+pub async fn get_latest_finalized_blocknumber(timeout: Option<u64>) -> Result<BlockNumber> {
     // TODO: Id should be different on every request, this is how request are identified by us and by the node.
     let params = RpcRequest {
         jsonrpc: "2.0",
@@ -159,21 +159,22 @@ pub async fn get_latest_finalized_blocknumber(timeout: Option<u64>) -> Result<i6
         MAX_RETRIES.into(),
     )
     .await
-    .context("Failed to get latest finalized block number")?;
+    .map_err(|e| {
+        BlockchainError::rpc_connection(format!("Failed to get latest finalized block number: {e}"))
+    })?;
 
-    convert_hex_string_to_i64(&blockheader.number)
-        .context("Invalid block number format in finalized block response")
+    BlockNumber::from_hex(&blockheader.number)
 }
 
 pub async fn get_full_block_by_number(
-    number: i64,
+    number: BlockNumber,
     timeout: Option<u64>,
 ) -> Result<BlockHeaderWithFullTransaction> {
     let params = RpcRequest {
         jsonrpc: "2.0",
         id: "0".to_string(),
         method: "eth_getBlockByNumber",
-        params: (format!("0x{number:x}"), true),
+        params: (format!("0x{:x}", number.value()), true),
     };
 
     make_retrying_rpc_call::<_, BlockHeaderWithFullTransaction>(
@@ -187,17 +188,17 @@ pub async fn get_full_block_by_number(
 // TODO: Make this work as expected
 #[allow(dead_code)]
 pub async fn batch_get_full_block_by_number(
-    numbers: Vec<i64>,
+    numbers: Vec<BlockNumber>,
     timeout: Option<u64>,
 ) -> Result<Vec<BlockHeaderWithFullTransaction>> {
     let mut params = Vec::new();
     for number in numbers {
-        let num_str = number.to_string();
+        let num_str = number.value().to_string();
         params.push(RpcRequest {
             jsonrpc: "2.0",
             id: num_str,
             method: "eth_getBlockByNumber",
-            params: (format!("0x{number:x}"), true),
+            params: (format!("0x{:x}", number.value()), true),
         });
     }
     make_rpc_call::<_, Vec<BlockHeaderWithFullTransaction>>(&params, timeout).await
@@ -207,9 +208,9 @@ async fn make_rpc_call<T: Serialize, R: for<'de> Deserialize<'de>>(
     params: &T,
     timeout: Option<u64>,
 ) -> Result<R> {
-    let connection_string = (*NODE_CONNECTION_STRING)
-        .as_ref()
-        .ok_or_else(|| eyre::eyre!("NODE_CONNECTION_STRING not set"))?;
+    let connection_string = (*NODE_CONNECTION_STRING).as_ref().ok_or_else(|| {
+        BlockchainError::configuration("NODE_CONNECTION_STRING", "Environment variable not set")
+    })?;
 
     let raw_response = match timeout {
         Some(seconds) => {
@@ -288,12 +289,14 @@ pub enum BlockTransaction {
 }
 
 impl TryFrom<BlockTransaction> for Transaction {
-    type Error = eyre::Error;
+    type Error = BlockchainError;
 
     fn try_from(value: BlockTransaction) -> std::result::Result<Self, Self::Error> {
         match value {
             BlockTransaction::Full(tx) => Ok(*tx),
-            BlockTransaction::Hash(_) => Err(eyre!("Cannot convert hash into Transaction")),
+            BlockTransaction::Hash(_) => Err(BlockchainError::internal(
+                "Cannot convert hash into Transaction",
+            )),
         }
     }
 }
@@ -348,10 +351,10 @@ pub trait EthereumRpcProvider {
     fn get_latest_finalized_blocknumber(
         &self,
         timeout: Option<u64>,
-    ) -> impl Future<Output = Result<i64>> + Send;
+    ) -> impl Future<Output = Result<BlockNumber>> + Send;
     fn get_full_block_by_number(
         &self,
-        number: i64,
+        number: BlockNumber,
         include_tx: bool,
         timeout: Option<u64>,
     ) -> impl Future<Output = Result<BlockHeader>> + Send;
@@ -464,7 +467,7 @@ impl EthereumJsonRpcClient {
 }
 
 impl EthereumRpcProvider for EthereumJsonRpcClient {
-    async fn get_latest_finalized_blocknumber(&self, timeout: Option<u64>) -> Result<i64> {
+    async fn get_latest_finalized_blocknumber(&self, timeout: Option<u64>) -> Result<BlockNumber> {
         let params = RpcRequest {
             jsonrpc: "2.0",
             id: "0".to_string(),
@@ -475,16 +478,17 @@ impl EthereumRpcProvider for EthereumJsonRpcClient {
         match self
             .make_retrying_rpc_call::<_, BlockHeader>(&params, timeout)
             .await
-            .context("Failed to get latest block number")
-        {
-            Ok(blockheader) => Ok(convert_hex_string_to_i64(&blockheader.number)?),
+            .map_err(|e| {
+                BlockchainError::rpc_connection(format!("Failed to get latest block number: {e}"))
+            }) {
+            Ok(blockheader) => Ok(BlockNumber::from_hex(&blockheader.number)?),
             Err(e) => Err(e),
         }
     }
 
     async fn get_full_block_by_number(
         &self,
-        number: i64,
+        number: BlockNumber,
         include_tx: bool,
         timeout: Option<u64>,
     ) -> Result<BlockHeader> {
@@ -492,7 +496,7 @@ impl EthereumRpcProvider for EthereumJsonRpcClient {
             jsonrpc: "2.0",
             id: "0".to_string(),
             method: "eth_getBlockByNumber",
-            params: (format!("0x{number:x}"), include_tx),
+            params: (format!("0x{:x}", number.value()), include_tx),
         };
 
         self.make_retrying_rpc_call::<_, BlockHeader>(&params, timeout)
@@ -751,7 +755,8 @@ mod tests {
         // Set max retries to 2, which shouldn't have any success cases.
         let client = EthereumJsonRpcClient::new("http://127.0.0.1:8091".to_owned(), 2);
 
-        let block = client.get_full_block_by_number(21598014, false, None);
+        let block =
+            client.get_full_block_by_number(BlockNumber::from_trusted(21598014), false, None);
 
         let block = block.await;
         assert!(block.is_err());
@@ -766,7 +771,8 @@ mod tests {
         );
 
         let client = EthereumJsonRpcClient::new("http://127.0.0.1:8092".to_owned(), 2);
-        let block = client.get_full_block_by_number(21598014, false, None);
+        let block =
+            client.get_full_block_by_number(BlockNumber::from_trusted(21598014), false, None);
 
         let block = block.await.unwrap();
         assert_eq!(block.hash, rpc_response.hash);
@@ -787,7 +793,9 @@ mod tests {
         let block_number = block_number.await.unwrap();
         assert_eq!(
             block_number,
-            i64::from_str_radix(rpc_response.number.strip_prefix("0x").unwrap(), 16).unwrap()
+            BlockNumber::from_trusted(
+                i64::from_str_radix(rpc_response.number.strip_prefix("0x").unwrap(), 16).unwrap()
+            )
         );
     }
 
@@ -800,7 +808,8 @@ mod tests {
         );
 
         let client = EthereumJsonRpcClient::new("http://127.0.0.1:8094".to_owned(), 1);
-        let block = client.get_full_block_by_number(21598014, false, None);
+        let block =
+            client.get_full_block_by_number(BlockNumber::from_trusted(21598014), false, None);
 
         let block = block.await.unwrap();
         assert_eq!(block.hash, rpc_response.hash);
@@ -825,7 +834,8 @@ mod tests {
         );
 
         let client = EthereumJsonRpcClient::new("http://127.0.0.1:8095".to_owned(), 1);
-        let block = client.get_full_block_by_number(21598014, true, None);
+        let block =
+            client.get_full_block_by_number(BlockNumber::from_trusted(21598014), true, None);
 
         let block = block.await.unwrap();
         assert_eq!(block.hash, rpc_response.hash);
@@ -863,7 +873,9 @@ mod tests {
         let block_number = block_number.await.unwrap();
         assert_eq!(
             block_number,
-            i64::from_str_radix(rpc_response.number.strip_prefix("0x").unwrap(), 16).unwrap()
+            BlockNumber::from_trusted(
+                i64::from_str_radix(rpc_response.number.strip_prefix("0x").unwrap(), 16).unwrap()
+            )
         );
     }
 

@@ -18,6 +18,7 @@ use crate::{
         index_metadata::{get_index_metadata, update_latest_quick_index_block_number_query},
     },
     rpc::EthereumRpcProvider,
+    types::BlockNumber,
 };
 
 #[derive(Debug)]
@@ -93,13 +94,15 @@ where
                 .get_latest_finalized_blocknumber(Some(self.config.rpc_timeout.into()))
                 .await?;
 
-            if new_latest_block > last_block_number {
-                let ending_block_number: i64 =
-                    if new_latest_block - last_block_number > self.config.index_batch_size.into() {
-                        last_block_number + i64::from(self.config.index_batch_size)
-                    } else {
-                        new_latest_block
-                    };
+            if new_latest_block > BlockNumber::from_trusted(last_block_number) {
+                let ending_block_number: i64 = if new_latest_block
+                    - BlockNumber::from_trusted(last_block_number)
+                    > BlockNumber::from_trusted(self.config.index_batch_size.into())
+                {
+                    last_block_number + i64::from(self.config.index_batch_size)
+                } else {
+                    new_latest_block.value()
+                };
 
                 self.index_block_range(
                     last_block_number + 1, // index from recorded last block + 1
@@ -147,7 +150,7 @@ where
                     task::spawn(async move {
                         provider
                             .get_full_block_by_number(
-                                block_number,
+                                BlockNumber::from_trusted(block_number),
                                 should_index_txs,
                                 Some(timeout.into()),
                             )
@@ -274,7 +277,7 @@ mod tests {
         let config = QuickIndexConfig::default();
         let db = DbConnection::new(url).await.unwrap();
         let mock_rpc = Arc::new(MockRpcProvider::new_with_data(
-            vec![5; block_fixtures.len()].into(),
+            vec![BlockNumber::from_trusted(5); block_fixtures.len()].into(),
             vec![block_fixtures[5].clone(); 5].into(),
         ));
         let should_terminate = Arc::new(AtomicBool::new(false));
@@ -334,7 +337,7 @@ mod tests {
         };
         let db = DbConnection::new(url).await.unwrap();
         let mock_rpc = Arc::new(MockRpcProvider::new_with_data(
-            vec![5; block_fixtures.len()].into(),
+            vec![BlockNumber::from_trusted(5); block_fixtures.len()].into(),
             vec![block_fixtures[5].clone(); 5].into(),
         ));
         let should_terminate = Arc::new(AtomicBool::new(false));
@@ -411,7 +414,7 @@ mod tests {
 
         // In this case let's simulate that the latest block number goes from 3-5.
         let mock_rpc = Arc::new(MockRpcProvider::new_with_data(
-            vec![5, 5].into(),
+            vec![BlockNumber::from_trusted(5), BlockNumber::from_trusted(5)].into(),
             vec![block_fixtures[4].clone(), block_fixtures[5].clone()].into(),
         ));
 
@@ -563,7 +566,7 @@ mod tests {
 
         // Empty the rpc response for get_block_by_number, so it will attempt to retry
         let mock_rpc = Arc::new(MockRpcProvider::new_with_data(
-            vec![5; block_fixtures.len()].into(),
+            vec![BlockNumber::from_trusted(5); block_fixtures.len()].into(),
             vec![].into(),
         ));
         let should_terminate = Arc::new(AtomicBool::new(false));

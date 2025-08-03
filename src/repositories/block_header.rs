@@ -1,4 +1,4 @@
-use eyre::{ContextCompat, Result};
+use crate::errors::{BlockchainError, Result};
 use sqlx::{query_builder::Separated, Postgres, QueryBuilder};
 
 use crate::{
@@ -58,18 +58,24 @@ fn convert_rpc_blockheader_to_dto(block_header: BlockHeader) -> Result<BlockHead
     let gas_limit = convert_hex_string_to_i64(&block_header.gas_limit)?;
     let gas_used = convert_hex_string_to_i64(&block_header.gas_used)?;
     let block_timestamp = convert_hex_string_to_i64(&block_header.timestamp)?;
-    let receipts_root = block_header
-        .receipts_root
-        .clone()
-        .context("receipt root should not be empty")?;
-    let state_root = block_header
-        .state_root
-        .clone()
-        .context("state root should not be empty")?;
-    let transaction_root = block_header
-        .transactions_root
-        .clone()
-        .context("transactions root should not be empty")?;
+    let receipts_root = block_header.receipts_root.clone().ok_or_else(|| {
+        BlockchainError::block_validation(
+            block_header.number.clone().parse().unwrap_or(-1),
+            "receipt root should not be empty",
+        )
+    })?;
+    let state_root = block_header.state_root.clone().ok_or_else(|| {
+        BlockchainError::block_validation(
+            block_header.number.clone().parse().unwrap_or(-1),
+            "state root should not be empty",
+        )
+    })?;
+    let transaction_root = block_header.transactions_root.clone().ok_or_else(|| {
+        BlockchainError::block_validation(
+            block_header.number.clone().parse().unwrap_or(-1),
+            "transactions root should not be empty",
+        )
+    })?;
 
     Ok(BlockHeaderDto {
         block_hash: block_header.hash.clone(),

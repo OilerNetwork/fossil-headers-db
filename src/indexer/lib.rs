@@ -130,7 +130,13 @@ async fn initialize_index_metadata(
     // Set current latest block number to the latest block number - 1 to make sure we don't miss the new blocks
     let latest_block_number = rpc_client.get_latest_finalized_blocknumber(None).await? - 1;
 
-    set_initial_indexing_status(db.clone(), latest_block_number, latest_block_number, true).await?;
+    set_initial_indexing_status(
+        db.clone(),
+        latest_block_number.value(),
+        latest_block_number.value(),
+        true,
+    )
+    .await?;
 
     if let Some(metadata) = get_index_metadata(db).await? {
         return Ok(metadata);
