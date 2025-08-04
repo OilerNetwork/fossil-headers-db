@@ -252,7 +252,10 @@ where
                 .backfilling_block_number
                 .unwrap_or(index_start_block_number);
 
-            if Self::is_backfilling_complete(current_backfilling_block_number) {
+            if Self::is_backfilling_complete(
+                current_backfilling_block_number,
+                index_start_block_number,
+            ) {
                 break;
             }
 
@@ -281,9 +284,12 @@ where
         }
     }
 
-    fn is_backfilling_complete(current_backfilling_block_number: i64) -> bool {
-        if current_backfilling_block_number <= 0 {
-            info!("[batch_index] Backfilling complete, terminating backfilling process.");
+    fn is_backfilling_complete(
+        current_backfilling_block_number: i64,
+        index_start_block_number: i64,
+    ) -> bool {
+        if current_backfilling_block_number <= index_start_block_number {
+            info!("[batch_index] Backfilling complete, reached starting block {}. Terminating backfilling process.", index_start_block_number);
             return true;
         }
         false
@@ -292,12 +298,12 @@ where
     fn calculate_block_range(
         &self,
         current_backfilling_block_number: i64,
-        _index_start_block_number: i64,
+        index_start_block_number: i64,
     ) -> (i64, i64) {
         let backfilling_target_block =
             current_backfilling_block_number - i64::from(self.config.index_batch_size);
-        let starting_block_number: i64 = if backfilling_target_block < 0 {
-            0
+        let starting_block_number: i64 = if backfilling_target_block < index_start_block_number {
+            index_start_block_number
         } else {
             backfilling_target_block
         };

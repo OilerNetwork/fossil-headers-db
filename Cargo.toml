@@ -15,7 +15,7 @@ futures = "0.3.30"
 futures-util = "0.3.30"
 reqwest = { version = "0.12.4", features = ["json"] }
 serde = "1.0.203"
-sqlx = { version = "0.8.2", features = [
+sqlx = { version = "0.8.6", features = [
     "runtime-tokio",
     "postgres",
     "chrono",

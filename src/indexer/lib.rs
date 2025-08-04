@@ -15,6 +15,7 @@ use crate::{
     },
     router,
     rpc::{EthereumJsonRpcClient, EthereumRpcProvider},
+    types::BlockNumber,
 };
 use tokio::task::JoinHandle;
 use tracing::{error, info};
@@ -29,6 +30,7 @@ pub struct IndexingConfig {
     pub rpc_timeout: u32,
     pub rpc_max_retries: u32,
     pub index_batch_size: u32,
+    pub start_block_offset: Option<u64>,
 }
 
 impl IndexingConfig {
@@ -47,6 +49,7 @@ pub struct IndexingConfigBuilder {
     rpc_timeout: u32,
     rpc_max_retries: u32,
     index_batch_size: u32,
+    start_block_offset: Option<u64>,
 }
 
 impl IndexingConfigBuilder {
@@ -61,6 +64,7 @@ impl IndexingConfigBuilder {
             rpc_timeout: 300,
             rpc_max_retries: 5,
             index_batch_size: 100,
+            start_block_offset: None,
         }
     }
 
@@ -142,6 +146,12 @@ impl IndexingConfigBuilder {
         self
     }
 
+    #[must_use]
+    pub const fn start_block_offset(mut self, start_block_offset: u64) -> Self {
+        self.start_block_offset = Some(start_block_offset);
+        self
+    }
+
     pub fn build(self) -> Result<IndexingConfig> {
         let db_conn_string = self.db_conn_string.ok_or_else(|| {
             BlockchainError::configuration(
@@ -191,6 +201,7 @@ impl IndexingConfigBuilder {
             rpc_timeout: self.rpc_timeout,
             rpc_max_retries: self.rpc_max_retries,
             index_batch_size: self.index_batch_size,
+            start_block_offset: self.start_block_offset,
         })
     }
 }
@@ -207,7 +218,7 @@ pub async fn start_indexing_services(
 ) -> Result<()> {
     let (db, rpc_client) = setup_database_and_rpc(&indexing_config).await?;
 
-    initialize_index_metadata(db.clone(), rpc_client.clone()).await?;
+    initialize_index_metadata(db.clone(), rpc_client.clone(), &indexing_config).await?;
 
     let router_handle = spawn_router_service(should_terminate.clone());
     let quick_indexer_handle = spawn_quick_indexer_service(
@@ -319,18 +330,24 @@ fn spawn_batch_indexer_service(
 async fn initialize_index_metadata(
     db: Arc<DbConnection>,
     rpc_client: Arc<EthereumJsonRpcClient>,
+    indexing_config: &IndexingConfig,
 ) -> Result<IndexMetadataDto> {
     if let Some(metadata) = get_index_metadata(db.clone()).await? {
         return Ok(metadata);
     }
 
-    // Set current latest block number to the latest block number - 1 to make sure we don't miss the new blocks
-    let latest_block_number = rpc_client.get_latest_finalized_blocknumber(None).await? - 1;
+    let starting_block_number = match indexing_config.start_block_offset {
+        Some(offset) => {
+            let latest_block_number = rpc_client.get_latest_finalized_blocknumber(None).await?;
+            latest_block_number - i64::try_from(offset).unwrap_or(0)
+        }
+        None => BlockNumber::from_trusted(0), // Default: start from block 0
+    };
 
     set_initial_indexing_status(
         db.clone(),
-        latest_block_number.value(),
-        latest_block_number.value(),
+        starting_block_number.value(),
+        starting_block_number.value(),
         true,
     )
     .await?;

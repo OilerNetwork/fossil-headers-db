@@ -35,6 +35,10 @@ pub async fn main() -> Result<()> {
             )
         })?;
 
+    let start_block_offset = env::var("START_BLOCK_OFFSET")
+        .ok()
+        .and_then(|s| s.parse::<u64>().ok());
+
     // Initialize tracing subscriber
     fmt().init();
 
@@ -42,11 +46,16 @@ pub async fn main() -> Result<()> {
 
     setup_ctrlc_handler(Arc::clone(&should_terminate))?;
 
-    let indexing_config = IndexingConfig::builder()
+    let mut indexing_config_builder = IndexingConfig::builder()
         .db_conn_string(db_conn_string)
         .node_conn_string(node_conn_string)
-        .should_index_txs(should_index_txs)
-        .build()?;
+        .should_index_txs(should_index_txs);
+
+    if let Some(offset) = start_block_offset {
+        indexing_config_builder = indexing_config_builder.start_block_offset(offset);
+    }
+
+    let indexing_config = indexing_config_builder.build()?;
 
     start_indexing_services(indexing_config, should_terminate).await?;
 
