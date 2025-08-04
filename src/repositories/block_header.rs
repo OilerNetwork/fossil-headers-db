@@ -384,7 +384,9 @@ mod tests {
     use super::*;
 
     fn get_test_db_connection() -> String {
-        env::var("DATABASE_URL").unwrap()
+        env::var("DATABASE_URL").unwrap_or_else(|_| {
+            "postgresql://postgres:postgres@localhost:5433/fossil_test".to_string()
+        })
     }
 
     fn assert_block_header_eq(header1: BlockHeaderDto, header2: BlockHeaderDto) {

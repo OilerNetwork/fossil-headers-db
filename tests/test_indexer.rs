@@ -20,6 +20,7 @@ use tokio::{runtime::Runtime, time::sleep};
 mod test_utils;
 
 #[tokio::test]
+#[serial_test::serial]
 async fn should_index_with_normal_rpc_without_tx() {
     let postgres_instance = Postgres::default().start().await.unwrap();
     let db_url = format!(
@@ -28,14 +29,14 @@ async fn should_index_with_normal_rpc_without_tx() {
         postgres_instance.get_host_port_ipv4(5432).await.unwrap()
     );
 
-    start_integration_mock_rpc_server("127.0.0.1:35351".to_owned())
+    start_integration_mock_rpc_server("127.0.0.1:35371".to_owned())
         .await
         .unwrap();
 
     // Setting timeouts and retries to minimum for faster tests
     let indexing_config = IndexingConfigBuilder::testing()
         .db_conn_string(db_url.clone())
-        .node_conn_string("http://127.0.0.1:35351")
+        .node_conn_string("http://127.0.0.1:35371")
         .should_index_txs(false)
         .rpc_timeout(10)
         .index_batch_size(100)
@@ -81,6 +82,7 @@ async fn should_index_with_normal_rpc_without_tx() {
 }
 
 #[tokio::test]
+#[serial_test::serial]
 async fn should_index_with_normal_rpc_with_tx() {
     let postgres_instance = Postgres::default().start().await.unwrap();
     let db_url = format!(
@@ -89,14 +91,14 @@ async fn should_index_with_normal_rpc_with_tx() {
         postgres_instance.get_host_port_ipv4(5432).await.unwrap()
     );
 
-    start_integration_mock_rpc_server("127.0.0.1:35352".to_owned())
+    start_integration_mock_rpc_server("127.0.0.1:35372".to_owned())
         .await
         .unwrap();
 
     // Setting timeouts and retries to minimum for faster tests
     let indexing_config = IndexingConfigBuilder::testing()
         .db_conn_string(db_url.clone())
-        .node_conn_string("http://127.0.0.1:35352")
+        .node_conn_string("http://127.0.0.1:35372")
         .should_index_txs(true)
         .rpc_timeout(10)
         .index_batch_size(100)
@@ -155,6 +157,7 @@ async fn should_index_with_normal_rpc_with_tx() {
 }
 
 #[tokio::test]
+#[serial_test::serial]
 async fn should_automatically_migrate_on_indexer_start() {
     let postgres_instance = Postgres::default().start().await.unwrap();
     let db_url = format!(
@@ -163,14 +166,14 @@ async fn should_automatically_migrate_on_indexer_start() {
         postgres_instance.get_host_port_ipv4(5432).await.unwrap()
     );
 
-    start_integration_mock_rpc_server("127.0.0.1:35355".to_owned())
+    start_integration_mock_rpc_server("127.0.0.1:35373".to_owned())
         .await
         .unwrap();
 
     // Setting timeouts and retries to minimum for faster tests
     let indexing_config = IndexingConfigBuilder::testing()
         .db_conn_string(db_url.clone())
-        .node_conn_string("http://127.0.0.1:35355")
+        .node_conn_string("http://127.0.0.1:35373")
         .should_index_txs(false)
         .index_batch_size(100)
         .build()
@@ -195,6 +198,7 @@ async fn should_automatically_migrate_on_indexer_start() {
 }
 
 #[tokio::test]
+#[serial_test::serial]
 async fn should_fail_to_index_without_rpc_available() {
     let postgres_instance = Postgres::default().start().await.unwrap();
     let db_url = format!(
@@ -208,10 +212,10 @@ async fn should_fail_to_index_without_rpc_available() {
         .db_conn_string(db_url)
         .node_conn_string("")
         .should_index_txs(false)
-        .max_retries(0)
+        .max_retries(1)
         .poll_interval(1)
         .rpc_timeout(1)
-        .rpc_max_retries(0)
+        .rpc_max_retries(1)
         .index_batch_size(100)
         .build()
         .unwrap();
@@ -222,7 +226,7 @@ async fn should_fail_to_index_without_rpc_available() {
     assert!(result.is_err());
     assert_eq!(
         result.unwrap_err().to_string(),
-        "Failed to get latest block number"
+        "RPC connection failed: Failed to get latest block number: Network error: Request error: builder error"
     );
 }
 

@@ -594,7 +594,9 @@ mod integration_tests {
     use super::*;
 
     fn get_test_db_connection() -> String {
-        env::var("DATABASE_URL").unwrap()
+        env::var("DATABASE_URL").unwrap_or_else(|_| {
+            "postgresql://postgres:postgres@localhost:5433/fossil_test".to_string()
+        })
     }
 
     #[tokio::test]

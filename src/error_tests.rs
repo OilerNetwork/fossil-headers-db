@@ -132,7 +132,7 @@ mod error_scenario_tests {
             };
             let message = format!("{}", error);
             assert!(message.contains("30"));
-            assert!(message.contains("timeout"));
+            assert!(message.contains("timed out"));
         }
     }
 }

@@ -533,6 +533,7 @@ mod tests {
     }
 
     #[sqlx::test]
+    #[serial_test::serial]
     async fn test_batch_indexer_new(
         _pool_options: PoolOptions<sqlx::Postgres>,
         connect_options: impl ConnectOptions,
@@ -553,6 +554,7 @@ mod tests {
     }
 
     #[sqlx::test]
+    #[serial_test::serial]
     async fn test_batch_index_default_headers_only(
         _pool_options: PoolOptions<sqlx::Postgres>,
         connect_options: impl ConnectOptions,
@@ -623,6 +625,7 @@ mod tests {
     }
 
     #[sqlx::test]
+    #[serial_test::serial]
     async fn test_batch_index_with_tx(
         _pool_options: PoolOptions<sqlx::Postgres>,
         connect_options: impl ConnectOptions,
@@ -710,6 +713,7 @@ mod tests {
     }
 
     #[sqlx::test]
+    #[serial_test::serial]
     async fn test_quick_index_always_index_away_from_latest_blocknumber_with_tx(
         _pool_options: PoolOptions<sqlx::Postgres>,
         connect_options: impl ConnectOptions,
@@ -795,6 +799,7 @@ mod tests {
     }
 
     #[sqlx::test]
+    #[serial_test::serial]
     async fn test_failed_to_get_index_metadata(
         _pool_options: PoolOptions<sqlx::Postgres>,
         connect_options: impl ConnectOptions,
@@ -818,6 +823,7 @@ mod tests {
     }
 
     #[sqlx::test]
+    #[serial_test::serial]
     async fn test_should_retry_when_rpc_error_happens(
         _pool_options: PoolOptions<sqlx::Postgres>,
         connect_options: impl ConnectOptions,

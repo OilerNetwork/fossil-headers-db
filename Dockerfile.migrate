@@ -1,0 +1,16 @@
+# Use rust:trixie which has a more recent Rust and better compatibility
+FROM rust:slim-bullseye
+
+WORKDIR /usr/app
+
+# Install sqlx-cli
+RUN cargo install sqlx-cli --no-default-features --features postgres
+
+# Copy migrations and scripts
+COPY migrations ./migrations
+COPY scripts ./scripts
+
+# Make scripts executable
+RUN chmod +x ./scripts/run-migrations.sh
+
+CMD ["./scripts/run-migrations.sh"]

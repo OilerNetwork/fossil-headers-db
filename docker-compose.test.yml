@@ -14,5 +14,15 @@ services:
       interval: 5s
       timeout: 5s
       retries: 5
+
+  migrate:
+    build:
+      context: .
+      dockerfile: Dockerfile.migrate
+    environment:
+      DATABASE_URL: postgresql://postgres:postgres@test_db:5432/fossil_test
+    depends_on:
+      test_db:
+        condition: service_healthy
 volumes:
   postgres_test_data:

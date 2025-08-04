@@ -52,6 +52,9 @@ use std::{future::Future, time::Duration};
 use tokio::time::sleep;
 use tracing::{error, warn};
 
+#[cfg(test)]
+use serial_test::serial;
+
 // TODO: instead of keeping this static, make it passable as a dependency.
 // This should allow us to test this module.
 static CLIENT: OnceLock<Client> = OnceLock::new();
@@ -888,6 +891,7 @@ mod integration_tests {
     }
 
     #[tokio::test]
+    #[serial]
     async fn test_max_retries_should_affect_number_of_retries() {
         let rpc_response = get_fixtures_for_tests().await;
         start_mock_rpc_server(
@@ -906,6 +910,7 @@ mod integration_tests {
     }
 
     #[tokio::test]
+    #[serial]
     async fn test_get_full_block_by_number_should_retry_when_failed() {
         let rpc_response = get_fixtures_for_tests().await;
         start_mock_rpc_server(
@@ -923,6 +928,7 @@ mod integration_tests {
     }
 
     #[tokio::test]
+    #[serial]
     async fn test_get_latest_finalized_blocknumber_should_retry_when_failed() {
         let rpc_response = get_fixtures_for_tests().await;
         start_mock_rpc_server(
@@ -943,6 +949,7 @@ mod integration_tests {
     }
 
     #[tokio::test]
+    #[serial]
     async fn test_get_full_block_by_number_without_tx() {
         let rpc_response = get_fixtures_for_tests().await;
         start_mock_rpc_server(
@@ -969,6 +976,7 @@ mod integration_tests {
     }
 
     #[tokio::test]
+    #[serial]
     async fn test_get_full_block_by_number_with_tx() {
         let rpc_response = get_fixtures_for_tests().await;
         start_mock_rpc_server(
@@ -1003,6 +1011,7 @@ mod integration_tests {
     }
 
     #[tokio::test]
+    #[serial]
     async fn test_get_latest_finalized_blocknumber() {
         let rpc_response = get_fixtures_for_tests().await;
         start_mock_rpc_server(

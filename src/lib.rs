@@ -105,7 +105,7 @@ pub mod types;
 // Internal modules (not part of public API)
 pub mod db;
 pub mod repositories;
-mod router;
+pub mod router;
 pub mod rpc;
 mod utils;
 

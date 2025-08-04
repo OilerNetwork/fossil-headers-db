@@ -57,14 +57,9 @@ jobs:
           up-flags: "--wait"
 
       - name: Install required tools
-        run: cargo install cargo-llvm-cov && cargo install sqlx-cli --features postgres
+        run: cargo install cargo-llvm-cov
 
-      - run: chmod +x scripts/run-test.sh && chmod +x scripts/run-migrations.sh
-
-      - name: Run migrations
-        env:
-          DATABASE_URL: "postgres://postgres:postgres@localhost:5433/fossil_test"
-        run: scripts/run-migrations.sh
+      - run: chmod +x scripts/run-test.sh
 
       - name: Run tests
         run: scripts/run-test.sh

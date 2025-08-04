@@ -16,7 +16,7 @@ mod unit_tests {
             let hex_str = "0x1a2b3c";
             let result = convert_hex_string_to_i64(hex_str);
             assert!(result.is_ok());
-            assert_eq!(result.unwrap(), 1714236);
+            assert_eq!(result.unwrap(), 1715004);
         }
 
         #[test]
@@ -24,7 +24,7 @@ mod unit_tests {
             let hex_str = "1a2b3c";
             let result = convert_hex_string_to_i64(hex_str);
             assert!(result.is_ok());
-            assert_eq!(result.unwrap(), 1714236);
+            assert_eq!(result.unwrap(), 1715004);
         }
 
         #[test]

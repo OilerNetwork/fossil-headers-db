@@ -233,7 +233,9 @@ mod tests {
     // Ideally, we should allow tx or db, however the executor trait is tricky to utilize
 
     fn get_test_db_connection() -> String {
-        env::var("DATABASE_URL").unwrap()
+        env::var("DATABASE_URL").unwrap_or_else(|_| {
+            "postgresql://postgres:postgres@localhost:5433/fossil_test".to_string()
+        })
     }
 
     #[tokio::test]
