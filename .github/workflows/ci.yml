@@ -45,16 +45,45 @@ jobs:
   tests:
     needs: [build]
     runs-on: ubuntu-latest
+    timeout-minutes: 30
     steps:
       - uses: actions/checkout@v3
 
       - uses: Swatinem/rust-cache@v2
 
-      - name: Setup test env
-        uses: hoverkraft-tech/compose-action@v2.0.2
-        with:
-          compose-file: "./docker-compose.test.yml"
-          up-flags: "--wait"
+      - name: Free up disk space
+        run: |
+          sudo rm -rf /usr/share/dotnet
+          sudo rm -rf /opt/ghc
+          sudo rm -rf "/usr/local/share/boost"
+          sudo rm -rf "$AGENT_TOOLSDIRECTORY"
+
+      - name: Pull PostgreSQL image
+        run: docker pull postgres:16-alpine
+
+      - name: Setup test database
+        run: |
+          docker run -d \
+            --name test_db \
+            -e POSTGRES_USER=postgres \
+            -e POSTGRES_PASSWORD=postgres \
+            -e POSTGRES_DB=fossil_test \
+            -p 5433:5432 \
+            --health-cmd="pg_isready -U postgres" \
+            --health-interval=5s \
+            --health-timeout=5s \
+            --health-retries=5 \
+            postgres:16-alpine
+
+      - name: Wait for database to be ready
+        run: |
+          timeout 60s bash -c 'until docker exec test_db pg_isready -U postgres; do sleep 2; done'
+
+      - name: Run migrations
+        run: |
+          export DATABASE_URL="postgresql://postgres:postgres@localhost:5433/fossil_test"
+          cargo install sqlx-cli --version "=0.8.6" --no-default-features --features postgres
+          sqlx migrate run
 
       - name: Install required tools
         run: cargo install cargo-llvm-cov
