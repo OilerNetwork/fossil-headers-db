@@ -94,6 +94,8 @@ pub async fn start_indexing_services(
             max_retries: indexing_config.max_retries,
             poll_interval: indexing_config.poll_interval,
             rpc_timeout: indexing_config.rpc_timeout,
+            max_concurrent_requests: 10,
+            task_timeout: 300,
         },
         db.clone(),
         rpc_client.clone(),

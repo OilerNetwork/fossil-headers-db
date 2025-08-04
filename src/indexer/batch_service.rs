@@ -8,7 +8,7 @@ use std::{
 
 use eyre::{eyre, Result};
 use futures::future::try_join_all;
-use tokio::task;
+use tokio::{sync::Semaphore, task};
 use tracing::{error, info, warn};
 
 use crate::{
@@ -31,6 +31,8 @@ pub struct BatchIndexConfig {
     pub rpc_timeout: u32,
     pub index_batch_size: u32,
     pub should_index_txs: bool,
+    pub max_concurrent_requests: usize,
+    pub task_timeout: u32,
 }
 
 impl Default for BatchIndexConfig {
@@ -41,6 +43,8 @@ impl Default for BatchIndexConfig {
             rpc_timeout: 300,
             index_batch_size: 50,
             should_index_txs: false,
+            max_concurrent_requests: 10,
+            task_timeout: 300,
         }
     }
 }
@@ -138,6 +142,7 @@ where
         should_terminate: &AtomicBool,
     ) -> Result<()> {
         let block_range: Vec<i64> = (starting_block..ending_block + 1).collect();
+        let semaphore = Arc::new(Semaphore::new(self.config.max_concurrent_requests));
 
         for i in 0..self.config.max_retries {
             if should_terminate.load(Ordering::Relaxed) {
@@ -153,15 +158,26 @@ where
                 .map(|block_number| {
                     let provider = self.rpc_provider.clone();
                     let should_index_txs = self.config.should_index_txs;
+                    let permit = semaphore.clone();
+                    let task_timeout = self.config.task_timeout;
 
                     task::spawn(async move {
-                        provider
-                            .get_full_block_by_number(
+                        let _permit = permit
+                            .acquire()
+                            .await
+                            .map_err(|_| eyre!("Semaphore closed"))?;
+
+                        // Add timeout to the entire RPC operation
+                        tokio::time::timeout(
+                            Duration::from_secs(task_timeout.into()),
+                            provider.get_full_block_by_number(
                                 BlockNumber::from_trusted(block_number),
                                 should_index_txs,
                                 Some(timeout.into()),
-                            )
-                            .await
+                            ),
+                        )
+                        .await
+                        .map_err(|_| eyre!("Task timeout getting block {}", block_number))?
                     })
                 })
                 .collect();
@@ -169,24 +185,43 @@ where
             let rpc_block_headers_response = try_join_all(rpc_block_headers_futures).await?;
 
             let mut block_headers = Vec::with_capacity(rpc_block_headers_response.len());
-            let mut has_err = false;
+            let mut error_count = 0;
+            let mut failed_blocks = Vec::new();
 
-            for header in rpc_block_headers_response.into_iter() {
-                match header {
+            for (idx, header_result) in rpc_block_headers_response.into_iter().enumerate() {
+                let block_num = starting_block + idx as i64;
+                match header_result {
                     Ok(header) => {
                         block_headers.push(header);
                     }
                     Err(e) => {
-                        has_err = true;
+                        error_count += 1;
+                        failed_blocks.push(block_num);
                         warn!(
-                            "[batch_index] Error retrieving block in range from {} to {}. error: {}",
-                            starting_block, ending_block, e
+                            "[batch_index] Error retrieving block {}. error: {}",
+                            block_num, e
                         )
                     }
                 }
             }
 
-            if !has_err {
+            // Implement backpressure based on error rate
+            let error_rate = error_count as f64 / block_range.len() as f64;
+            if error_rate > 0.2 {
+                warn!(
+                    "[batch_index] High error rate ({:.1}%) in range {} to {}. Failed blocks: {:?}",
+                    error_rate * 100.0,
+                    starting_block,
+                    ending_block,
+                    failed_blocks
+                );
+
+                // Apply exponential backoff for high error rates
+                let backoff_secs = if error_rate > 0.5 { 10 } else { 5 };
+                tokio::time::sleep(Duration::from_secs(backoff_secs)).await;
+            }
+
+            if error_count == 0 {
                 let mut db_tx = self.db.pool.begin().await?;
 
                 if self.config.should_index_txs {

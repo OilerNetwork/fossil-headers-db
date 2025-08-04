@@ -58,6 +58,7 @@ use futures_util::future::join_all;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
 use std::time::Duration;
+use tokio::sync::Semaphore;
 use tokio::task;
 use tracing::{error, info, warn};
 
@@ -69,6 +70,10 @@ const MAX_RETRIES: u64 = 10;
 // Seconds
 const POLL_INTERVAL: u64 = 60;
 const TIMEOUT: u64 = 300;
+
+// Concurrency limits
+const MAX_CONCURRENT_TASKS: usize = 10;
+const TASK_TIMEOUT: u64 = 300;
 
 pub async fn fill_gaps(
     start: Option<BlockNumber>,
@@ -297,6 +302,9 @@ async fn update_blocks(
     should_terminate: &AtomicBool,
 ) -> Result<()> {
     if range_start <= last_block {
+        // Create semaphore to limit concurrent tasks
+        let semaphore = Arc::new(Semaphore::new(MAX_CONCURRENT_TASKS));
+
         for n in (range_start.value()..=last_block.value().max(range_start.value()))
             .step_by(size as usize)
         {
@@ -309,21 +317,81 @@ async fn update_blocks(
 
             let tasks: Vec<_> = (n..range_end)
                 .map(|block_number| {
-                    task::spawn(process_block(BlockNumber::from_trusted(block_number)))
+                    let permit = semaphore.clone();
+                    task::spawn(async move {
+                        let _permit = permit.acquire().await.map_err(|_| {
+                            BlockchainError::internal("Semaphore closed".to_string())
+                        })?;
+
+                        // Add timeout to task execution
+                        tokio::time::timeout(
+                            Duration::from_secs(TASK_TIMEOUT),
+                            process_block(BlockNumber::from_trusted(block_number)),
+                        )
+                        .await
+                        .map_err(|_| {
+                            BlockchainError::internal(format!(
+                                "Task timeout processing block {block_number}"
+                            ))
+                        })?
+                    })
                 })
                 .collect();
 
             let all_res = join_all(tasks).await;
-            let has_err = all_res.iter().any(|join_res| {
-                join_res.is_err() || join_res.as_ref().is_ok_and(|res| res.is_err())
-            });
 
-            if has_err {
-                error!("Rerun from block: {}", n);
+            // Process results and handle failures gracefully
+            let mut failed_blocks = Vec::new();
+            let mut successful_count = 0;
+
+            for (idx, join_res) in all_res.iter().enumerate() {
+                let block_num = n + idx as i64;
+                match join_res {
+                    Ok(Ok(_)) => {
+                        successful_count += 1;
+                    }
+                    Ok(Err(e)) => {
+                        warn!("Block {} failed with error: {}", block_num, e);
+                        failed_blocks.push(block_num);
+                    }
+                    Err(e) => {
+                        warn!("Task for block {} panicked: {}", block_num, e);
+                        failed_blocks.push(block_num);
+                    }
+                }
+            }
+
+            // Implement backpressure: if too many failures, slow down
+            let failure_ratio = failed_blocks.len() as f64 / all_res.len() as f64;
+            if failure_ratio > 0.3 {
+                warn!(
+                    "High failure rate ({:.1}%), applying backpressure. Failed blocks: {:?}",
+                    failure_ratio * 100.0,
+                    failed_blocks
+                );
+                tokio::time::sleep(Duration::from_secs(5)).await;
+
+                // If failure rate is very high, break to avoid overwhelming the system
+                if failure_ratio > 0.7 {
+                    error!(
+                        "Failure rate too high ({:.1}%), stopping batch. Rerun from block: {}",
+                        failure_ratio * 100.0,
+                        n
+                    );
+                    break;
+                }
+            }
+
+            if !failed_blocks.is_empty() {
+                error!(
+                    "Some blocks failed. Failed: {:?}. Rerun from block: {}",
+                    failed_blocks, n
+                );
                 break;
             }
             info!(
-                "Written blocks {} - {}. Next block: {}",
+                "Successfully written {} blocks ({} - {}). Next block: {}",
+                successful_count,
                 n,
                 range_end - 1,
                 range_end
