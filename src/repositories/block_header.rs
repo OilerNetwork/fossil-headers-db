@@ -460,7 +460,7 @@ mod tests {
             .unwrap();
 
         // Check if the block header was inserted
-        let result: Result<BlockHeaderDto, sqlx::Error> =
+        let result: std::result::Result<BlockHeaderDto, sqlx::Error> =
             sqlx::query_as("SELECT * FROM blockheaders WHERE number = $1")
                 .bind(convert_hex_string_to_i64(&block_headers[0].number).unwrap())
                 .fetch_one(&mut *tx)
@@ -490,7 +490,7 @@ mod tests {
             .unwrap();
 
         // Check if the first block is inserted
-        let result: Result<BlockHeaderDto, sqlx::Error> =
+        let result: std::result::Result<BlockHeaderDto, sqlx::Error> =
             sqlx::query_as("SELECT * FROM blockheaders WHERE number = $1")
                 .bind(convert_hex_string_to_i64(&block_headers[0].number).unwrap())
                 .fetch_one(&mut *tx)
@@ -503,7 +503,7 @@ mod tests {
         assert_block_header_eq(block_header_in_db, block_header_to_compare);
 
         // Check if the second block is inserted
-        let result: Result<BlockHeaderDto, sqlx::Error> =
+        let result: std::result::Result<BlockHeaderDto, sqlx::Error> =
             sqlx::query_as("SELECT * FROM blockheaders WHERE number = $1")
                 .bind(convert_hex_string_to_i64(&block_headers[1].number).unwrap())
                 .fetch_one(&mut *tx)
@@ -564,7 +564,7 @@ mod tests {
         assert!(result.is_ok());
 
         // See if its properly updated
-        let result: Result<BlockHeaderDto, sqlx::Error> =
+        let result: std::result::Result<BlockHeaderDto, sqlx::Error> =
             sqlx::query_as("SELECT * FROM blockheaders WHERE number = $1")
                 .bind(convert_hex_string_to_i64(&block_headers[0].number).unwrap())
                 .fetch_one(&mut *tx)
@@ -594,7 +594,7 @@ mod tests {
             .unwrap();
 
         // Check if the transactions are inserted
-        let result: Result<TransactionDto, sqlx::Error> =
+        let result: std::result::Result<TransactionDto, sqlx::Error> =
             sqlx::query_as("SELECT * FROM transactions WHERE transaction_hash = $1")
                 .bind(&transaction.hash)
                 .fetch_one(&mut *tx)
@@ -628,7 +628,7 @@ mod tests {
             .unwrap();
 
         // Check if the transactions are inserted
-        let result: Result<TransactionDto, sqlx::Error> =
+        let result: std::result::Result<TransactionDto, sqlx::Error> =
             sqlx::query_as("SELECT * FROM transactions WHERE transaction_hash = $1")
                 .bind(&transaction_1.hash)
                 .fetch_one(&mut *tx)
@@ -639,7 +639,7 @@ mod tests {
         let transaction_in_db = result.unwrap();
         assert_transactions_eq(transaction_in_db, transaction_to_compare);
 
-        let result: Result<TransactionDto, sqlx::Error> =
+        let result: std::result::Result<TransactionDto, sqlx::Error> =
             sqlx::query_as("SELECT * FROM transactions WHERE transaction_hash = $1")
                 .bind(&transaction_2.hash)
                 .fetch_one(&mut *tx)
@@ -701,7 +701,7 @@ mod tests {
         assert!(result.is_ok());
 
         // See if its properly updated
-        let result: Result<TransactionDto, sqlx::Error> =
+        let result: std::result::Result<TransactionDto, sqlx::Error> =
             sqlx::query_as("SELECT * FROM transactions WHERE transaction_hash = $1")
                 .bind(&transaction.hash)
                 .fetch_one(&mut *tx)
@@ -729,7 +729,7 @@ mod tests {
             .unwrap();
 
         // Check if the block header was inserted
-        let result: Result<BlockHeaderDto, sqlx::Error> =
+        let result: std::result::Result<BlockHeaderDto, sqlx::Error> =
             sqlx::query_as("SELECT * FROM blockheaders WHERE number = $1")
                 .bind(convert_hex_string_to_i64(&block_headers[0].number).unwrap())
                 .fetch_one(&mut *tx)
@@ -759,7 +759,7 @@ mod tests {
             .unwrap();
 
         // Check if the first block is inserted
-        let result: Result<BlockHeaderDto, sqlx::Error> =
+        let result: std::result::Result<BlockHeaderDto, sqlx::Error> =
             sqlx::query_as("SELECT * FROM blockheaders WHERE number = $1")
                 .bind(convert_hex_string_to_i64(&block_headers[0].number).unwrap())
                 .fetch_one(&mut *tx)
@@ -772,7 +772,7 @@ mod tests {
         assert_block_header_eq(block_header_in_db, block_header_to_compare);
 
         // Check if the second block is inserted
-        let result: Result<BlockHeaderDto, sqlx::Error> =
+        let result: std::result::Result<BlockHeaderDto, sqlx::Error> =
             sqlx::query_as("SELECT * FROM blockheaders WHERE number = $1")
                 .bind(convert_hex_string_to_i64(&block_headers[1].number).unwrap())
                 .fetch_one(&mut *tx)
@@ -835,7 +835,7 @@ mod tests {
         assert!(result.is_ok());
 
         // See if its properly updated
-        let result: Result<BlockHeaderDto, sqlx::Error> =
+        let result: std::result::Result<BlockHeaderDto, sqlx::Error> =
             sqlx::query_as("SELECT * FROM blockheaders WHERE number = $1")
                 .bind(convert_hex_string_to_i64(&block_headers[0].number).unwrap())
                 .fetch_one(&mut *tx)

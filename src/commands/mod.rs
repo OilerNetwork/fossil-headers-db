@@ -3,7 +3,7 @@ use crate::types::BlockNumber;
 use futures_util::future::join_all;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
-use std::time::{self, Duration};
+use std::time::Duration;
 use tokio::task;
 use tracing::{error, info, warn};
 
@@ -228,7 +228,7 @@ async fn chain_update_blocks(
                     new_latest_block.value(),
                     POLL_INTERVAL
                 );
-                async_std::task::sleep(time::Duration::from_secs(POLL_INTERVAL)).await;
+                tokio::time::sleep(Duration::from_secs(POLL_INTERVAL)).await;
             }
         }
     }

@@ -1,11 +1,11 @@
 use std::{sync::Arc, thread};
 
-use async_std::fs;
 use axum::{routing::post, Json, Router};
 use eyre::Result;
 use fossil_headers_db::rpc::{BlockHeader, BlockTransaction};
 use reqwest::StatusCode;
 use serde::{Deserialize, Deserializer, Serialize, Serializer};
+use tokio::fs;
 use tokio::{
     net::TcpListener,
     runtime::Runtime,
