@@ -13,6 +13,7 @@ use tracing::{error, info, warn};
 
 use crate::{
     db::DbConnection,
+    errors::BlockchainError,
     repositories::{
         block_header::{insert_block_header_only_query, insert_block_header_query},
         index_metadata::{
@@ -35,6 +36,12 @@ pub struct BatchIndexConfig {
     pub task_timeout: u32,
 }
 
+impl BatchIndexConfig {
+    pub fn builder() -> BatchIndexConfigBuilder {
+        BatchIndexConfigBuilder::new()
+    }
+}
+
 impl Default for BatchIndexConfig {
     fn default() -> Self {
         Self {
@@ -46,6 +53,149 @@ impl Default for BatchIndexConfig {
             max_concurrent_requests: 10,
             task_timeout: 300,
         }
+    }
+}
+
+pub struct BatchIndexConfigBuilder {
+    max_retries: u8,
+    poll_interval: u32,
+    rpc_timeout: u32,
+    index_batch_size: u32,
+    should_index_txs: bool,
+    max_concurrent_requests: usize,
+    task_timeout: u32,
+}
+
+impl BatchIndexConfigBuilder {
+    pub fn new() -> Self {
+        Self {
+            max_retries: 10,
+            poll_interval: 10,
+            rpc_timeout: 300,
+            index_batch_size: 50,
+            should_index_txs: false,
+            max_concurrent_requests: 10,
+            task_timeout: 300,
+        }
+    }
+
+    pub fn high_throughput() -> Self {
+        Self::new()
+            .index_batch_size(200)
+            .max_concurrent_requests(50)
+            .task_timeout(600)
+            .rpc_timeout(600)
+    }
+
+    pub fn conservative() -> Self {
+        Self::new()
+            .index_batch_size(10)
+            .max_concurrent_requests(3)
+            .task_timeout(120)
+            .max_retries(5)
+    }
+
+    pub fn testing() -> Self {
+        Self::new()
+            .index_batch_size(2)
+            .max_concurrent_requests(1)
+            .task_timeout(30)
+            .max_retries(1)
+    }
+
+    pub fn max_retries(mut self, max_retries: u8) -> Self {
+        self.max_retries = max_retries;
+        self
+    }
+
+    pub fn poll_interval(mut self, poll_interval: u32) -> Self {
+        self.poll_interval = poll_interval;
+        self
+    }
+
+    pub fn rpc_timeout(mut self, rpc_timeout: u32) -> Self {
+        self.rpc_timeout = rpc_timeout;
+        self
+    }
+
+    pub fn index_batch_size(mut self, index_batch_size: u32) -> Self {
+        self.index_batch_size = index_batch_size;
+        self
+    }
+
+    pub fn should_index_txs(mut self, should_index_txs: bool) -> Self {
+        self.should_index_txs = should_index_txs;
+        self
+    }
+
+    pub fn max_concurrent_requests(mut self, max_concurrent_requests: usize) -> Self {
+        self.max_concurrent_requests = max_concurrent_requests;
+        self
+    }
+
+    pub fn task_timeout(mut self, task_timeout: u32) -> Self {
+        self.task_timeout = task_timeout;
+        self
+    }
+
+    pub fn build(self) -> Result<BatchIndexConfig, BlockchainError> {
+        if self.max_retries == 0 {
+            return Err(BlockchainError::configuration(
+                "max_retries",
+                "Max retries must be greater than 0",
+            ));
+        }
+
+        if self.poll_interval == 0 {
+            return Err(BlockchainError::configuration(
+                "poll_interval",
+                "Poll interval must be greater than 0",
+            ));
+        }
+
+        if self.rpc_timeout == 0 {
+            return Err(BlockchainError::configuration(
+                "rpc_timeout",
+                "RPC timeout must be greater than 0",
+            ));
+        }
+
+        if self.index_batch_size == 0 {
+            return Err(BlockchainError::configuration(
+                "index_batch_size",
+                "Index batch size must be greater than 0",
+            ));
+        }
+
+        if self.max_concurrent_requests == 0 {
+            return Err(BlockchainError::configuration(
+                "max_concurrent_requests",
+                "Max concurrent requests must be greater than 0",
+            ));
+        }
+
+        if self.task_timeout == 0 {
+            return Err(BlockchainError::configuration(
+                "task_timeout",
+                "Task timeout must be greater than 0",
+            ));
+        }
+
+        Ok(BatchIndexConfig {
+            max_retries: self.max_retries,
+            poll_interval: self.poll_interval,
+            rpc_timeout: self.rpc_timeout,
+            index_batch_size: self.index_batch_size,
+            should_index_txs: self.should_index_txs,
+            max_concurrent_requests: self.max_concurrent_requests,
+            task_timeout: self.task_timeout,
+        })
+    }
+}
+
+impl Default for BatchIndexConfigBuilder {
+    fn default() -> Self {
+        Self::new()
     }
 }
 

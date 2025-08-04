@@ -42,16 +42,11 @@ pub async fn main() -> Result<()> {
 
     setup_ctrlc_handler(Arc::clone(&should_terminate))?;
 
-    let indexing_config = IndexingConfig {
-        db_conn_string,
-        node_conn_string,
-        should_index_txs,
-        max_retries: 10,
-        poll_interval: 10,
-        rpc_timeout: 300,
-        rpc_max_retries: 5,
-        index_batch_size: 100, // larger size if we are indexing headers only
-    };
+    let indexing_config = IndexingConfig::builder()
+        .db_conn_string(db_conn_string)
+        .node_conn_string(node_conn_string)
+        .should_index_txs(should_index_txs)
+        .build()?;
 
     start_indexing_services(indexing_config, should_terminate).await?;
 

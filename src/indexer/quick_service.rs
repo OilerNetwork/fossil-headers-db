@@ -13,6 +13,7 @@ use tracing::{error, info, warn};
 
 use crate::{
     db::DbConnection,
+    errors::BlockchainError,
     repositories::{
         block_header::{insert_block_header_only_query, insert_block_header_query},
         index_metadata::{get_index_metadata, update_latest_quick_index_block_number_query},
@@ -30,6 +31,12 @@ pub struct QuickIndexConfig {
     pub should_index_txs: bool,
 }
 
+impl QuickIndexConfig {
+    pub fn builder() -> QuickIndexConfigBuilder {
+        QuickIndexConfigBuilder::new()
+    }
+}
+
 impl Default for QuickIndexConfig {
     fn default() -> Self {
         Self {
@@ -39,6 +46,117 @@ impl Default for QuickIndexConfig {
             index_batch_size: 20,
             should_index_txs: false,
         }
+    }
+}
+
+pub struct QuickIndexConfigBuilder {
+    max_retries: u8,
+    poll_interval: u32,
+    rpc_timeout: u32,
+    index_batch_size: u32,
+    should_index_txs: bool,
+}
+
+impl QuickIndexConfigBuilder {
+    pub fn new() -> Self {
+        Self {
+            max_retries: 10,
+            poll_interval: 10,
+            rpc_timeout: 300,
+            index_batch_size: 20,
+            should_index_txs: false,
+        }
+    }
+
+    pub fn fast_polling() -> Self {
+        Self::new()
+            .poll_interval(2)
+            .index_batch_size(50)
+            .rpc_timeout(120)
+    }
+
+    pub fn slow_polling() -> Self {
+        Self::new()
+            .poll_interval(60)
+            .index_batch_size(5)
+            .max_retries(5)
+    }
+
+    pub fn testing() -> Self {
+        Self::new()
+            .poll_interval(1)
+            .index_batch_size(1)
+            .rpc_timeout(30)
+            .max_retries(1)
+    }
+
+    pub fn max_retries(mut self, max_retries: u8) -> Self {
+        self.max_retries = max_retries;
+        self
+    }
+
+    pub fn poll_interval(mut self, poll_interval: u32) -> Self {
+        self.poll_interval = poll_interval;
+        self
+    }
+
+    pub fn rpc_timeout(mut self, rpc_timeout: u32) -> Self {
+        self.rpc_timeout = rpc_timeout;
+        self
+    }
+
+    pub fn index_batch_size(mut self, index_batch_size: u32) -> Self {
+        self.index_batch_size = index_batch_size;
+        self
+    }
+
+    pub fn should_index_txs(mut self, should_index_txs: bool) -> Self {
+        self.should_index_txs = should_index_txs;
+        self
+    }
+
+    pub fn build(self) -> Result<QuickIndexConfig, BlockchainError> {
+        if self.max_retries == 0 {
+            return Err(BlockchainError::configuration(
+                "max_retries",
+                "Max retries must be greater than 0",
+            ));
+        }
+
+        if self.poll_interval == 0 {
+            return Err(BlockchainError::configuration(
+                "poll_interval",
+                "Poll interval must be greater than 0",
+            ));
+        }
+
+        if self.rpc_timeout == 0 {
+            return Err(BlockchainError::configuration(
+                "rpc_timeout",
+                "RPC timeout must be greater than 0",
+            ));
+        }
+
+        if self.index_batch_size == 0 {
+            return Err(BlockchainError::configuration(
+                "index_batch_size",
+                "Index batch size must be greater than 0",
+            ));
+        }
+
+        Ok(QuickIndexConfig {
+            max_retries: self.max_retries,
+            poll_interval: self.poll_interval,
+            rpc_timeout: self.rpc_timeout,
+            index_batch_size: self.index_batch_size,
+            should_index_txs: self.should_index_txs,
+        })
+    }
+}
+
+impl Default for QuickIndexConfigBuilder {
+    fn default() -> Self {
+        Self::new()
     }
 }
 

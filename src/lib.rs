@@ -103,10 +103,10 @@ pub mod indexer;
 pub mod types;
 
 // Internal modules (not part of public API)
-mod db;
-mod repositories;
+pub mod db;
+pub mod repositories;
 mod router;
-mod rpc;
+pub mod rpc;
 mod utils;
 
 // Test-only modules
