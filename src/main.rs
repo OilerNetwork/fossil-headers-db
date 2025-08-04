@@ -1,18 +1,10 @@
-use fossil_headers_db as _;
-
-mod commands;
-mod db;
-mod errors;
-mod repositories;
-mod router;
-mod rpc;
-mod types;
-mod utils;
-
-use crate::errors::{BlockchainError, Result};
-use crate::types::BlockNumber;
+// Legacy CLI binary - uses library interface only
 use clap::{Parser, ValueEnum};
 use core::cmp::min;
+use fossil_headers_db::{
+    commands, database::DB_MAX_CONNECTIONS, health::initialize_router, BlockNumber,
+    BlockchainError, Result,
+};
 use futures::future::join;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
@@ -35,7 +27,7 @@ struct Cli {
     end: Option<i64>,
 
     /// Number of threads (Max = 1000)
-    #[arg(short, long, default_value_t = db::DB_MAX_CONNECTIONS)]
+    #[arg(short, long, default_value_t = DB_MAX_CONNECTIONS)]
     loopsize: u32,
 }
 
@@ -61,7 +53,7 @@ async fn main() -> Result<()> {
     setup_ctrlc_handler(Arc::clone(&should_terminate))?;
 
     let router = async {
-        let res = router::initialize_router(should_terminate.clone()).await;
+        let res = initialize_router(should_terminate.clone()).await;
         match res {
             Ok(()) => info!("Router task completed"),
             Err(e) => warn!("Router task failed: {:?}", e),
@@ -81,7 +73,7 @@ async fn main() -> Result<()> {
                 commands::update_from(
                     start,
                     end,
-                    min(cli.loopsize, db::DB_MAX_CONNECTIONS),
+                    min(cli.loopsize, DB_MAX_CONNECTIONS),
                     Arc::clone(&terminate_clone),
                 )
                 .await

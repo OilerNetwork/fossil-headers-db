@@ -6,17 +6,50 @@
 //!
 //! ## Architecture Overview
 //!
-//! The library is organized into several key modules:
+//! The library is organized into several key modules with clear boundaries:
 //!
+//! ### Public API Modules
 //! - [`commands`] - Legacy CLI indexing operations (update/fix modes)
-//! - [`db`] - Database connection management and core data operations  
 //! - [`errors`] - Domain-specific error types for blockchain operations
 //! - [`indexer`] - Modern indexing services (batch and quick indexing)
-//! - [`repositories`] - Database query abstractions and data access layer
-//! - [`router`] - HTTP health check endpoints and routing
-//! - [`rpc`] - Ethereum RPC client for fetching blockchain data
 //! - [`types`] - Type-safe domain models (BlockNumber, BlockHash, etc.)
-//! - [`utils`] - Common utility functions for hex conversion and validation
+//!
+//! ### Facade Modules (Simplified Interfaces)
+//! - [`database`] - Database operations with hidden connection management
+//! - [`blockchain`] - RPC operations with abstracted client complexity
+//! - [`health`] - Health check endpoints and monitoring
+//!
+//! ### Internal Modules (Implementation Details)
+//! - `db` - Database connection management and core data operations  
+//! - `repositories` - Database query abstractions and data access layer
+//! - `router` - HTTP health check endpoints and routing
+//! - `rpc` - Ethereum RPC client for fetching blockchain data
+//! - `utils` - Common utility functions for hex conversion and validation
+//!
+//! ## Module Interaction Patterns
+//!
+//! The library follows a layered architecture:
+//!
+//! ```text
+//! ┌─────────────────────────────────────────────────────────────┐
+//! │                   Public API Layer                         │
+//! │  commands, indexer, types, errors                          │
+//! └─────────────────────────────────────────────────────────────┘
+//!                              ↓
+//! ┌─────────────────────────────────────────────────────────────┐
+//! │                   Facade Layer                              │
+//! │  database, blockchain, health                               │
+//! └─────────────────────────────────────────────────────────────┘
+//!                              ↓
+//! ┌─────────────────────────────────────────────────────────────┐
+//! │                Implementation Layer                         │
+//! │  db, repositories, rpc, router, utils                      │
+//! └─────────────────────────────────────────────────────────────┘
+//! ```
+//!
+//! - **No circular dependencies**: Lower layers never import from higher layers
+//! - **Clear boundaries**: Public API only uses facade modules
+//! - **Hidden complexity**: Implementation details are not exposed
 //!
 //! ## Usage Examples
 //!
@@ -63,18 +96,63 @@
 //! # }
 //! ```
 
+// Core public modules
 pub mod commands;
-pub mod db;
-#[cfg(test)]
-pub mod error_tests;
 pub mod errors;
 pub mod indexer;
-#[cfg(test)]
-pub mod mocks;
-pub mod repositories;
-pub mod router;
-pub mod rpc;
-#[cfg(test)]
-pub mod test_utils;
 pub mod types;
-pub mod utils;
+
+// Internal modules (not part of public API)
+mod db;
+mod repositories;
+mod router;
+mod rpc;
+mod utils;
+
+// Test-only modules
+#[cfg(test)]
+mod error_tests;
+#[cfg(test)]
+mod mocks;
+#[cfg(test)]
+mod test_utils;
+
+// Public re-exports for simplified API
+pub use errors::{BlockchainError, Result};
+pub use types::{Address, BlockHash, BlockNumber, TransactionHash};
+
+// Facade modules for complex subsystems
+pub mod database {
+    //! Database operations facade
+    //!
+    //! This module provides a simplified interface to database operations,
+    //! hiding the internal complexity of connection management and repositories.
+
+    pub use crate::db::{
+        check_db_connection, find_first_gap, find_null_data, get_db_pool,
+        get_last_stored_blocknumber, write_blockheader, DB_MAX_CONNECTIONS,
+    };
+}
+
+pub mod blockchain {
+    //! Blockchain RPC operations facade
+    //!
+    //! This module provides a simplified interface to Ethereum RPC operations,
+    //! abstracting the underlying RPC client complexity.
+
+    pub use crate::rpc::{BlockHeader, BlockHeaderWithFullTransaction, EthereumRpcProvider};
+}
+
+pub mod health {
+    //! Health check and monitoring facade
+    //!
+    //! This module provides health check endpoints and system monitoring capabilities.
+
+    pub use crate::router::initialize_router;
+}
+
+// Internal utilities (hidden from public API)
+#[doc(hidden)]
+pub mod internal {
+    pub use crate::utils::*;
+}
