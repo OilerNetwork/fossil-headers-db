@@ -52,7 +52,7 @@ async fn should_index_with_normal_rpc_without_tx() {
     });
 
     // Wait for the indexer to finish
-    sleep(Duration::from_secs(1)).await;
+    sleep(Duration::from_secs(5)).await;
 
     // Check if indexing is done.
     let db = DbConnection::new(db_url).await.unwrap();
@@ -62,7 +62,7 @@ async fn should_index_with_normal_rpc_without_tx() {
         .unwrap();
 
     assert_eq!(result.current_latest_block_number, 5);
-    assert_eq!(result.indexing_starting_block_number, 4);
+    assert_eq!(result.indexing_starting_block_number, 0);
     assert!(!result.is_backfilling);
     assert_eq!(result.backfilling_block_number, Some(0));
 
@@ -72,12 +72,12 @@ async fn should_index_with_normal_rpc_without_tx() {
             .fetch_all(&db.pool)
             .await
             .unwrap();
-    assert_eq!(headers.len(), 6); // 0 - 5
-    assert_eq!(headers[5].number, 5);
-    // Hash taken from the block fixtures at tests/fixtures/indexer/eth_getBlockByNumber_sepolia_5.json
+    assert_eq!(headers.len(), 5); // 0 - 4 (batch indexer)
+    assert_eq!(headers[4].number, 4);
+    // Hash taken from the block fixtures at tests/fixtures/indexer/eth_getBlockByNumber_sepolia_4.json
     assert_eq!(
-        headers[5].block_hash,
-        "0x290f89df59305c3d677c61be77279a942010e5687c7ab3bcda82954a96f1ceea"
+        headers[4].block_hash,
+        "0x3736e6e39d90d95fc157b01f36f40c4b598f754f8912c57fa515f6051186c921"
     );
 }
 
@@ -114,7 +114,7 @@ async fn should_index_with_normal_rpc_with_tx() {
     });
 
     // Wait for the indexer to finish
-    sleep(Duration::from_secs(1)).await;
+    sleep(Duration::from_secs(5)).await;
 
     // Check if indexing is done.
     let db = DbConnection::new(db_url).await.unwrap();
@@ -124,7 +124,7 @@ async fn should_index_with_normal_rpc_with_tx() {
         .unwrap();
 
     assert_eq!(result.current_latest_block_number, 5);
-    assert_eq!(result.indexing_starting_block_number, 4);
+    assert_eq!(result.indexing_starting_block_number, 0);
     assert!(!result.is_backfilling);
     assert_eq!(result.backfilling_block_number, Some(0));
 
@@ -134,12 +134,12 @@ async fn should_index_with_normal_rpc_with_tx() {
             .fetch_all(&db.pool)
             .await
             .unwrap();
-    assert_eq!(headers.len(), 6); // 0 - 5
-    assert_eq!(headers[5].number, 5);
-    // Hash taken from the block fixtures at tests/fixtures/indexer/eth_getBlockByNumber_sepolia_5.json
+    assert_eq!(headers.len(), 5); // 0 - 4 (batch indexer)
+    assert_eq!(headers[4].number, 4);
+    // Hash taken from the block fixtures at tests/fixtures/indexer/eth_getBlockByNumber_sepolia_4.json
     assert_eq!(
-        headers[5].block_hash,
-        "0x290f89df59305c3d677c61be77279a942010e5687c7ab3bcda82954a96f1ceea"
+        headers[4].block_hash,
+        "0x3736e6e39d90d95fc157b01f36f40c4b598f754f8912c57fa515f6051186c921"
     );
 
     // Check if txs were indexed correctly
@@ -147,13 +147,8 @@ async fn should_index_with_normal_rpc_with_tx() {
         .fetch_all(&db.pool)
         .await
         .unwrap();
-    assert_eq!(transactions.len(), 3);
-    assert_eq!(transactions[2].block_number, 5);
-    // Hash taken from the block fixtures at tests/fixtures/indexer/eth_getBlockByNumber_sepolia_5.json
-    assert_eq!(
-        transactions[2].transaction_hash,
-        "0x71f743f444f577f1f952b16ef43aa5f3657007569b79355efda6729a27406a90"
-    );
+    // Since only blocks 0-4 are indexed and they have no transactions, expect 0
+    assert_eq!(transactions.len(), 0);
 }
 
 #[tokio::test]

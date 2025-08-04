@@ -69,6 +69,7 @@
 //!     rpc_timeout: 30,
 //!     rpc_max_retries: 5,
 //!     index_batch_size: 1000,
+//!     start_block_offset: None,
 //! };
 //!
 //! start_indexing_services(config, should_terminate).await?;

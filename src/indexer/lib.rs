@@ -336,21 +336,51 @@ async fn initialize_index_metadata(
         return Ok(metadata);
     }
 
-    let starting_block_number = match indexing_config.start_block_offset {
-        Some(offset) => {
-            let latest_block_number = rpc_client.get_latest_finalized_blocknumber(None).await?;
-            latest_block_number - i64::try_from(offset).unwrap_or(0)
-        }
-        None => BlockNumber::from_trusted(0), // Default: start from block 0
-    };
+    let latest_block_number = rpc_client.get_latest_finalized_blocknumber(None).await?;
+
+    let backfill_from_block = indexing_config.start_block_offset.map_or_else(
+        || {
+            // Default: start backfilling from block before latest (latest - 1)
+            if latest_block_number.value() > 0 {
+                latest_block_number - 1
+            } else {
+                BlockNumber::from_trusted(0)
+            }
+        },
+        |offset| latest_block_number - i64::try_from(offset).unwrap_or(0),
+    );
+
+    // indexing_starting_block_number is the minimum block to backfill to (typically 0)
+    let indexing_starting_block_number = 0;
 
     set_initial_indexing_status(
         db.clone(),
-        starting_block_number.value(),
-        starting_block_number.value(),
+        latest_block_number.value(),
+        indexing_starting_block_number,
         true,
     )
     .await?;
+
+    // Set backfilling_block_number to start backfilling from the appropriate block
+    if backfill_from_block.value() > indexing_starting_block_number {
+        let mut tx = db.pool.begin().await.map_err(|e| {
+            BlockchainError::database_connection(format!("Failed to begin transaction: {e}"))
+        })?;
+
+        sqlx::query("UPDATE index_metadata SET backfilling_block_number = $1")
+            .bind(backfill_from_block.value())
+            .execute(&mut *tx)
+            .await
+            .map_err(|e| {
+                BlockchainError::database_connection(format!(
+                    "Failed to update backfilling_block_number: {e}"
+                ))
+            })?;
+
+        tx.commit().await.map_err(|e| {
+            BlockchainError::database_connection(format!("Failed to commit transaction: {e}"))
+        })?;
+    }
 
     if let Some(metadata) = get_index_metadata(db).await? {
         return Ok(metadata);

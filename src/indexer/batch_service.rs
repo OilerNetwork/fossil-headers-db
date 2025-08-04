@@ -584,10 +584,18 @@ mod tests {
         ));
         let should_terminate = Arc::new(AtomicBool::new(false));
 
-        // Set initial db state, setting to 5 as we want the indexer to start from 5.
-        set_initial_indexing_status(db.clone(), 5, 5, true)
+        // Set initial db state, setting to 5 as current and 0 as starting to enable backfilling
+        set_initial_indexing_status(db.clone(), 5, 0, true)
             .await
             .unwrap();
+
+        // Manually set backfilling_block_number to enable backfilling work
+        let mut tx = db.pool.begin().await.unwrap();
+        sqlx::query("UPDATE index_metadata SET backfilling_block_number = 5")
+            .execute(&mut *tx)
+            .await
+            .unwrap();
+        tx.commit().await.unwrap();
 
         let indexer = BatchIndexer::new(config, db.clone(), mock_rpc, should_terminate.clone());
 
@@ -658,10 +666,18 @@ mod tests {
         ));
         let should_terminate = Arc::new(AtomicBool::new(false));
 
-        // Set initial db state, setting to 5 as we want the indexer to start from 5.
-        set_initial_indexing_status(db.clone(), 5, 5, true)
+        // Set initial db state, setting to 5 as current and 0 as starting to enable backfilling
+        set_initial_indexing_status(db.clone(), 5, 0, true)
             .await
             .unwrap();
+
+        // Manually set backfilling_block_number to enable backfilling work
+        let mut tx = db.pool.begin().await.unwrap();
+        sqlx::query("UPDATE index_metadata SET backfilling_block_number = 5")
+            .execute(&mut *tx)
+            .await
+            .unwrap();
+        tx.commit().await.unwrap();
 
         let indexer = BatchIndexer::new(config, db.clone(), mock_rpc, should_terminate.clone());
 
@@ -746,10 +762,18 @@ mod tests {
             .into(),
         ));
 
-        // Set initial db state, setting to 3 as we want the indexer to start from 3.
-        set_initial_indexing_status(db.clone(), 3, 3, true)
+        // Set initial db state, setting to 3 as current and 0 as starting to enable backfilling
+        set_initial_indexing_status(db.clone(), 3, 0, true)
             .await
             .unwrap();
+
+        // Manually set backfilling_block_number to enable backfilling work
+        let mut tx = db.pool.begin().await.unwrap();
+        sqlx::query("UPDATE index_metadata SET backfilling_block_number = 3")
+            .execute(&mut *tx)
+            .await
+            .unwrap();
+        tx.commit().await.unwrap();
 
         let indexer = BatchIndexer::new(config, db.clone(), mock_rpc, should_terminate.clone());
 
@@ -847,10 +871,18 @@ mod tests {
         let mock_rpc = Arc::new(MockRpcProvider::new_with_data(vec![].into(), vec![].into()));
         let should_terminate = Arc::new(AtomicBool::new(false));
 
-        // Set initial db state, setting to 4 as we want the indexer to start from 5.
-        set_initial_indexing_status(db.clone(), 4, 4, true)
+        // Set initial db state, setting up backfilling work that will trigger RPC calls
+        set_initial_indexing_status(db.clone(), 5, 0, true)
             .await
             .unwrap();
+
+        // Manually set backfilling_block_number to something higher than starting block to force work
+        let mut tx = db.pool.begin().await.unwrap();
+        sqlx::query("UPDATE index_metadata SET backfilling_block_number = 10")
+            .execute(&mut *tx)
+            .await
+            .unwrap();
+        tx.commit().await.unwrap();
 
         let indexer = BatchIndexer::new(config, db.clone(), mock_rpc, should_terminate.clone());
 
