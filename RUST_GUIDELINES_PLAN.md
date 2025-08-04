@@ -73,12 +73,12 @@ This document outlines a priority-structured plan to apply Rust best practices f
 **Issue**: <10% documentation coverage makes maintenance difficult
 
 **Tasks**:
-- [ ] Add module-level documentation to all `mod.rs` files
-- [ ] Document all public functions in `src/rpc/mod.rs`
-- [ ] Document all public functions in `src/db/mod.rs`
-- [ ] Document all public functions in `src/repositories/`
-- [ ] Add usage examples to complex functions
-- [ ] Add `#[doc(hidden)]` for internal public items
+- [x] Add module-level documentation to all `mod.rs` files
+- [x] Document all public functions in `src/rpc/mod.rs`
+- [x] Document all public functions in `src/db/mod.rs`
+- [x] Document all public functions in `src/repositories/`
+- [x] Add usage examples to complex functions
+- [x] Add `#[doc(hidden)]` for internal public items
 
 **Success Criteria**: All public APIs documented with examples, clear module purposes
 

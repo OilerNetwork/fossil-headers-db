@@ -1,3 +1,57 @@
+//! # Legacy CLI Commands
+//!
+//! This module implements the legacy command-line interface operations for blockchain
+//! data management. It provides two main operational modes: `update` and `fix` for
+//! maintaining blockchain data integrity and completeness.
+//!
+//! ## Key Operations
+//!
+//! - **Update Mode** ([`update_from`]): Fetches new blocks from the blockchain and stores them
+//! - **Fill Gaps Mode** ([`fill_gaps`]): Identifies and fills missing blocks in stored data
+//!
+//! ## Features
+//!
+//! - **Concurrent Processing**: Configurable concurrency for parallel block fetching
+//! - **Resilient Operations**: Built-in retry logic with exponential backoff
+//! - **Gap Detection**: Automatic identification of missing block ranges
+//! - **Graceful Shutdown**: Responds to termination signals for clean shutdowns
+//! - **Progress Monitoring**: Comprehensive logging of indexing progress
+//!
+//! ## Usage Examples
+//!
+//! ### Update Mode - Fetch Latest Blocks
+//! ```rust,no_run
+//! use fossil_headers_db::commands::update_from;
+//! use fossil_headers_db::types::BlockNumber;
+//! use std::sync::{Arc, atomic::AtomicBool};
+//!
+//! # async fn example() -> eyre::Result<()> {
+//! let should_terminate = Arc::new(AtomicBool::new(false));
+//!
+//! // Fetch from block 19000000 to latest finalized, processing 100 blocks at a time
+//! let start = Some(BlockNumber::from_trusted(19000000));
+//! update_from(start, None, 100, should_terminate).await?;
+//! # Ok(())
+//! # }
+//! ```
+//!
+//! ### Fill Gaps Mode - Fix Missing Data
+//! ```rust,no_run
+//! use fossil_headers_db::commands::fill_gaps;
+//! use fossil_headers_db::types::BlockNumber;
+//! use std::sync::{Arc, atomic::AtomicBool};
+//!
+//! # async fn example() -> eyre::Result<()> {
+//! let should_terminate = Arc::new(AtomicBool::new(false));
+//!
+//! // Fill gaps between blocks 1000000 and 2000000
+//! let start = Some(BlockNumber::from_trusted(1000000));
+//! let end = Some(BlockNumber::from_trusted(2000000));
+//! fill_gaps(start, end, should_terminate).await?;
+//! # Ok(())
+//! # }
+//! ```
+
 use crate::errors::{BlockchainError, Result};
 use crate::types::BlockNumber;
 use futures_util::future::join_all;

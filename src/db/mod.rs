@@ -1,3 +1,65 @@
+//! # Database Operations
+//!
+//! This module provides database connectivity, connection pooling, and core data operations
+//! for storing and retrieving Ethereum blockchain data. It manages the persistent storage
+//! of block headers, transactions, and indexing metadata.
+//!
+//! ## Key Features
+//!
+//! - **Connection Pooling**: Managed PostgreSQL connection pool with configurable limits
+//! - **Retry Logic**: Built-in retry mechanisms with exponential backoff for resilient operations
+//! - **Gap Detection**: Algorithms to identify missing blocks in the stored data
+//! - **Batch Operations**: Efficient bulk insertion of blockchain data
+//! - **Migration Support**: Database schema management and versioning
+//!
+//! ## Database Schema
+//!
+//! The module works with several key tables:
+//! - `blockheaders` - Stores Ethereum block header information
+//! - `transactions` - Stores transaction data (optional based on configuration)
+//! - `index_metadata` - Tracks indexing progress and system state
+//!
+//! ## Connection Management
+//!
+//! The database connection is managed through a singleton pattern using [`get_db_pool()`]
+//! which creates and maintains a connection pool. The pool is configured with:
+//! - Maximum connections: [`DB_MAX_CONNECTIONS`] (50 by default)
+//! - Slow query logging: Queries taking >120 seconds are logged
+//! - Automatic reconnection and error handling
+//!
+//! ## Usage Examples
+//!
+//! ### Basic Database Operations
+//! ```rust,no_run
+//! use fossil_headers_db::db::{get_db_pool, get_last_stored_blocknumber};
+//!
+//! # async fn example() -> eyre::Result<()> {
+//! // Get database connection pool  
+//! let pool = get_db_pool().await?;
+//!
+//! // Get the latest stored block number
+//! let latest_block = get_last_stored_blocknumber().await?;
+//! println!("Latest stored block: {}", latest_block.value());
+//! # Ok(())
+//! # }
+//! ```
+//!
+//! ### Gap Detection
+//! ```rust,no_run
+//! use fossil_headers_db::db::find_first_gap;
+//! use fossil_headers_db::types::BlockNumber;
+//!
+//! # async fn example() -> eyre::Result<()> {
+//! let start = BlockNumber::from_trusted(1000000);
+//! let end = BlockNumber::from_trusted(2000000);
+//!
+//! if let Some(gap_block) = find_first_gap(start, end).await? {
+//!     println!("Found gap at block: {}", gap_block.value());
+//! }
+//! # Ok(())
+//! # }
+//! ```
+
 use crate::errors::{BlockchainError, Result};
 use crate::rpc::BlockHeaderWithFullTransaction;
 use crate::types::BlockNumber;
@@ -17,6 +79,42 @@ use tracing::{error, info, warn};
 static DB_POOL: OnceCell<Arc<Pool<Postgres>>> = OnceCell::const_new();
 pub const DB_MAX_CONNECTIONS: u32 = 50;
 
+/// Gets or creates the shared database connection pool.
+///
+/// This function implements a singleton pattern for database connection management.
+/// On first call, it creates a new connection pool with the configured settings.
+/// Subsequent calls return the existing pool, ensuring efficient resource usage.
+///
+/// # Connection Configuration
+///
+/// The connection pool is configured with:
+/// - Maximum connections: [`DB_MAX_CONNECTIONS`] (50 by default)
+/// - Slow query logging: Queries taking >120 seconds are logged at DEBUG level
+/// - Connection string from `DB_CONNECTION_STRING` environment variable
+///
+/// # Returns
+///
+/// Returns a `Result<Arc<Pool<Postgres>>>` containing the shared connection pool.
+///
+/// # Errors
+///
+/// This function will return an error if:
+/// - The `DB_CONNECTION_STRING` environment variable is not set or invalid
+/// - The database server is unreachable
+/// - Authentication fails
+/// - The connection pool cannot be initialized
+///
+/// # Examples
+///
+/// ```rust,no_run
+/// use fossil_headers_db::db::get_db_pool;
+///
+/// # async fn example() -> eyre::Result<()> {
+/// let pool = get_db_pool().await?;
+/// // Use the pool for database operations
+/// # Ok(())
+/// # }
+/// ```
 pub async fn get_db_pool() -> Result<Arc<Pool<Postgres>>> {
     if let Some(pool) = DB_POOL.get() {
         Ok(pool.clone())
@@ -62,6 +160,36 @@ pub async fn get_db_pool() -> Result<Arc<Pool<Postgres>>> {
     }
 }
 
+/// Checks if the database connection is healthy and responsive.
+///
+/// This function performs a simple connectivity test by executing a basic query
+/// against the database. It's commonly used for health checks and monitoring.
+///
+/// # Returns
+///
+/// Returns `Result<()>` which is `Ok(())` if the connection is healthy.
+///
+/// # Errors
+///
+/// This function will return an error if:
+/// - The database connection pool cannot be obtained
+/// - The database server is unreachable
+/// - The test query fails to execute
+/// - Authentication or permissions issues occur
+///
+/// # Examples
+///
+/// ```rust,no_run
+/// use fossil_headers_db::db::check_db_connection;
+///
+/// # async fn example() -> eyre::Result<()> {
+/// match check_db_connection().await {
+///     Ok(()) => println!("Database is healthy"),
+///     Err(e) => println!("Database connection failed: {}", e),
+/// }
+/// # Ok(())
+/// # }
+/// ```
 pub async fn check_db_connection() -> Result<()> {
     let pool = get_db_pool().await.map_err(|e| {
         BlockchainError::database_connection(format!("Failed to get database pool: {e}"))
@@ -73,11 +201,40 @@ pub async fn check_db_connection() -> Result<()> {
     Ok(())
 }
 
-/**
- * Retrieves the blocknumber of the latest stored blockheader
- *
- * @Returns blocknumber, else -1 if table is empty
- */
+/// Retrieves the block number of the latest stored block header.
+///
+/// This function queries the database to find the highest block number that has been
+/// successfully stored in the blockheaders table. This is commonly used to determine
+/// where to resume indexing operations.
+///
+/// # Returns
+///
+/// Returns a `Result<BlockNumber>` containing:
+/// - The highest block number if blocks exist in the database
+/// - Block number -1 if the table is empty (no blocks stored yet)
+///
+/// # Errors
+///
+/// This function will return an error if:
+/// - The database connection fails
+/// - The query cannot be executed
+/// - The result cannot be parsed as a valid block number
+///
+/// # Examples
+///
+/// ```rust,no_run
+/// use fossil_headers_db::db::get_last_stored_blocknumber;
+///
+/// # async fn example() -> eyre::Result<()> {
+/// let latest_block = get_last_stored_blocknumber().await?;
+/// if latest_block.value() == -1 {
+///     println!("No blocks stored yet");
+/// } else {
+///     println!("Latest stored block: {}", latest_block.value());
+/// }
+/// # Ok(())
+/// # }
+/// ```
 pub async fn get_last_stored_blocknumber() -> Result<BlockNumber> {
     const MAX_RETRIES: u32 = 3;
 
@@ -104,9 +261,47 @@ pub async fn get_last_stored_blocknumber() -> Result<BlockNumber> {
     .await
 }
 
-/**
- * Returns the first missing blocknumber in between provided numbers (inclusive)
- */
+/// Finds the first missing block number within a specified range.
+///
+/// This function performs gap detection by checking for missing block numbers in the
+/// specified range (inclusive). It uses a recursive CTE to generate a series of expected
+/// block numbers and identifies the first one that's missing from the database.
+///
+/// # Arguments
+///
+/// * `start` - The starting block number (inclusive)
+/// * `end` - The ending block number (inclusive)
+///
+/// # Returns
+///
+/// Returns a `Result<Option<BlockNumber>>` where:
+/// - `Some(BlockNumber)` contains the first missing block number if a gap exists
+/// - `None` if no gaps are found in the specified range
+///
+/// # Errors
+///
+/// This function will return an error if:
+/// - The database connection fails
+/// - The gap detection query cannot be executed
+/// - Invalid block number range is provided (start > end)
+///
+/// # Examples
+///
+/// ```rust,no_run
+/// use fossil_headers_db::db::find_first_gap;
+/// use fossil_headers_db::types::BlockNumber;
+///
+/// # async fn example() -> eyre::Result<()> {
+/// let start = BlockNumber::from_trusted(1000000);
+/// let end = BlockNumber::from_trusted(1001000);
+///
+/// match find_first_gap(start, end).await? {
+///     Some(gap_block) => println!("Found gap at block: {}", gap_block.value()),
+///     None => println!("No gaps found in range"),
+/// }
+/// # Ok(())
+/// # }
+/// ```
 pub async fn find_first_gap(start: BlockNumber, end: BlockNumber) -> Result<Option<BlockNumber>> {
     let pool = get_db_pool().await?;
     let result: Option<(i64,)> = sqlx::query_as(

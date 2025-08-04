@@ -1,3 +1,48 @@
+//! # Ethereum RPC Client
+//!
+//! This module provides functionality for interacting with Ethereum JSON-RPC endpoints to fetch
+//! blockchain data including block headers, transactions, and network state information.
+//!
+//! ## Key Features
+//!
+//! - **Resilient RPC Operations**: Built-in retry logic with exponential backoff
+//! - **Batch Processing**: Efficient batch fetching of multiple blocks
+//! - **Type Safety**: Strongly typed blockchain data structures
+//! - **Async/Await Support**: Fully asynchronous operations using Tokio
+//! - **Configurable Timeouts**: Per-request timeout configuration
+//!
+//! ## Architecture
+//!
+//! The module centers around the [`EthereumRpcProvider`] trait which defines the interface
+//! for blockchain data fetching. The primary implementation is [`EthereumJsonRpcClient`]
+//! which handles HTTP JSON-RPC communication with Ethereum nodes.
+//!
+//! ## Usage Examples
+//!
+//! ### Fetching Latest Block
+//! ```rust,no_run
+//! use fossil_headers_db::rpc::get_latest_finalized_blocknumber;
+//!
+//! # async fn example() -> eyre::Result<()> {
+//! let latest_block = get_latest_finalized_blocknumber(Some(30)).await?;
+//! println!("Latest finalized block: {}", latest_block.value());
+//! # Ok(())
+//! # }
+//! ```
+//!
+//! ### Fetching Block Data
+//! ```rust,no_run
+//! use fossil_headers_db::rpc::get_full_block_by_number;
+//! use fossil_headers_db::types::BlockNumber;
+//!
+//! # async fn example() -> eyre::Result<()> {
+//! let block_number = BlockNumber::from_trusted(19000000);
+//! let block_data = get_full_block_by_number(block_number, Some(30)).await?;
+//! println!("Block hash: {}", block_data.hash);
+//! # Ok(())
+//! # }
+//! ```
+
 use crate::errors::{BlockchainError, Result};
 use crate::types::BlockNumber;
 use once_cell::sync::Lazy;
@@ -144,6 +189,43 @@ pub struct BlockHeaderWithFullTransaction {
     pub parent_beacon_block_root: Option<String>,
 }
 
+/// Fetches the latest finalized block number from the Ethereum network.
+///
+/// This function queries the Ethereum node for the most recent block that has been
+/// finalized by the network consensus mechanism. Finalized blocks are considered
+/// safe from reorganization.
+///
+/// # Arguments
+///
+/// * `timeout` - Optional timeout in seconds for the RPC request. If `None`, uses default timeout.
+///
+/// # Returns
+///
+/// Returns a `Result<BlockNumber>` containing the latest finalized block number on success.
+///
+/// # Errors
+///
+/// This function will return an error if:
+/// - The NODE_CONNECTION_STRING environment variable is not set
+/// - The RPC request fails or times out
+/// - The response cannot be parsed as a valid block number
+/// - Network connectivity issues occur
+///
+/// # Examples
+///
+/// ```rust,no_run
+/// use fossil_headers_db::rpc::get_latest_finalized_blocknumber;
+///
+/// # async fn example() -> eyre::Result<()> {
+/// // Get latest finalized block with 30 second timeout
+/// let latest_block = get_latest_finalized_blocknumber(Some(30)).await?;
+/// println!("Latest finalized block: {}", latest_block.value());
+///
+/// // Use default timeout
+/// let latest_block = get_latest_finalized_blocknumber(None).await?;
+/// # Ok(())
+/// # }
+/// ```
 pub async fn get_latest_finalized_blocknumber(timeout: Option<u64>) -> Result<BlockNumber> {
     // TODO: Id should be different on every request, this is how request are identified by us and by the node.
     let params = RpcRequest {
@@ -166,6 +248,47 @@ pub async fn get_latest_finalized_blocknumber(timeout: Option<u64>) -> Result<Bl
     BlockNumber::from_hex(&blockheader.number)
 }
 
+/// Fetches complete block data including all transactions for a specific block number.
+///
+/// This function retrieves comprehensive blockchain data for a given block, including
+/// the block header information and full transaction details. This is more expensive
+/// than fetching just block headers but provides complete block state.
+///
+/// # Arguments
+///
+/// * `number` - The block number to fetch data for
+/// * `timeout` - Optional timeout in seconds for the RPC request. If `None`, uses default timeout.
+///
+/// # Returns
+///
+/// Returns a `Result<BlockHeaderWithFullTransaction>` containing the complete block data
+/// including all transaction details.
+///
+/// # Errors
+///
+/// This function will return an error if:
+/// - The NODE_CONNECTION_STRING environment variable is not set
+/// - The specified block number doesn't exist on the network
+/// - The RPC request fails or times out
+/// - The response cannot be parsed as valid block data
+/// - Network connectivity issues occur
+///
+/// # Examples
+///
+/// ```rust,no_run
+/// use fossil_headers_db::rpc::get_full_block_by_number;
+/// use fossil_headers_db::types::BlockNumber;
+///
+/// # async fn example() -> eyre::Result<()> {
+/// let block_number = BlockNumber::from_trusted(19000000);
+/// let block_data = get_full_block_by_number(block_number, Some(30)).await?;
+///
+/// println!("Block hash: {}", block_data.hash);
+/// println!("Number of transactions: {}", block_data.transactions.len());
+/// println!("Gas used: {}", block_data.gas_used);
+/// # Ok(())
+/// # }
+/// ```
 pub async fn get_full_block_by_number(
     number: BlockNumber,
     timeout: Option<u64>,

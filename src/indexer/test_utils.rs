@@ -6,6 +6,10 @@ use tokio::sync::Mutex;
 use crate::rpc::{BlockHeader, EthereumRpcProvider};
 use crate::types::BlockNumber;
 
+/// Mock RPC provider for testing purposes.
+///
+/// This struct is used internally for testing and is not part of the public API.
+#[doc(hidden)]
 pub struct MockRpcProvider {
     pub latest_finalized_blocknumber_vec: Mutex<VecDeque<BlockNumber>>,
     pub full_block_vec: Mutex<VecDeque<BlockHeader>>,

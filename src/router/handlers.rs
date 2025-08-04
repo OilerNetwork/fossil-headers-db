@@ -3,6 +3,10 @@ use axum::{
     response::{IntoResponse, Response},
 };
 
+/// Internal error wrapper for HTTP handlers.
+///
+/// This struct is used internally for error handling and is not part of the public API.
+#[doc(hidden)]
 pub struct Error(eyre::Error);
 
 impl IntoResponse for Error {

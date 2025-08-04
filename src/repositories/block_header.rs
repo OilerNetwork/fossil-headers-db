@@ -6,6 +6,10 @@ use crate::{
     utils::{convert_hex_string_to_i32, convert_hex_string_to_i64},
 };
 
+/// Internal data transfer object for transaction data.
+///
+/// This struct is used internally for database operations and is not part of the public API.
+#[doc(hidden)]
 #[allow(dead_code)]
 #[derive(Debug, Clone, sqlx::FromRow)]
 pub struct TransactionDto {
@@ -22,6 +26,10 @@ pub struct TransactionDto {
     pub chain_id: Option<String>,
 }
 
+/// Internal data transfer object for block header data.
+///
+/// This struct is used internally for database operations and is not part of the public API.
+#[doc(hidden)]
 #[allow(dead_code)]
 #[derive(Debug, Clone, sqlx::FromRow)]
 pub struct BlockHeaderDto {

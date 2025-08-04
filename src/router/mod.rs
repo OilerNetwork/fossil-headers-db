@@ -1,3 +1,45 @@
+//! # HTTP Router and Health Checks
+//!
+//! This module provides HTTP endpoints for service health monitoring and status checking.
+//! It implements a simple web server that can be used for load balancer health checks,
+//! monitoring systems, and basic service diagnostics.
+//!
+//! ## Features
+//!
+//! - **Health Check Endpoint**: Simple HTTP endpoint at `/` for service health status
+//! - **Database Connectivity**: Health check includes database connection verification
+//! - **Graceful Shutdown**: Responds to termination signals for clean service shutdown
+//! - **Configurable Binding**: Configurable host and port binding via environment variables
+//!
+//! ## Endpoints
+//!
+//! - `GET /` - Health check endpoint that returns 200 OK if service and database are healthy
+//!
+//! ## Configuration
+//!
+//! The router is configured via environment variables:
+//! - `ROUTER_ENDPOINT` - Host and port to bind to (default: "0.0.0.0:3000")
+//!
+//! ## Usage
+//!
+//! ```rust,no_run
+//! use fossil_headers_db::router::initialize_router;
+//! use std::sync::{Arc, atomic::AtomicBool};
+//!
+//! # async fn example() -> eyre::Result<()> {
+//! let should_terminate = Arc::new(AtomicBool::new(false));
+//! initialize_router(should_terminate).await?;
+//! # Ok(())
+//! # }
+//! ```
+//!
+//! ## Health Check Response
+//!
+//! The health check endpoint performs the following checks:
+//! 1. Verifies database connection is active
+//! 2. Returns HTTP 200 with "OK" if healthy
+//! 3. Returns HTTP 500 if database is unreachable
+
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::{sync::Arc, time::Duration};
 
