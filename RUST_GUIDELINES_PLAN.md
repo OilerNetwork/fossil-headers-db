@@ -134,10 +134,10 @@ This document outlines a priority-structured plan to apply Rust best practices f
 **Issue**: Using deprecated external crates for features now in std
 
 **Tasks**:
-- [ ] Replace `once_cell::sync::Lazy` with `std::sync::OnceLock`
-- [ ] Remove `once_cell` dependency if no longer needed
-- [ ] Update other dependencies to latest stable versions
-- [ ] Review for other modern std replacements
+- [x] Replace `once_cell::sync::Lazy` with `std::sync::OnceLock`
+- [x] Remove `once_cell` dependency if no longer needed
+- [x] Update other dependencies to latest stable versions
+- [x] Review for other modern std replacements
 
 **Success Criteria**: Reduced dependency footprint, using latest std features
 

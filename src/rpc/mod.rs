@@ -45,21 +45,17 @@
 
 use crate::errors::{BlockchainError, Result};
 use crate::types::BlockNumber;
-use once_cell::sync::Lazy;
 use reqwest::Client;
 use serde::{Deserialize, Serialize};
+use std::sync::OnceLock;
 use std::{future::Future, time::Duration};
 use tokio::time::sleep;
 use tracing::{error, warn};
 
 // TODO: instead of keeping this static, make it passable as a dependency.
 // This should allow us to test this module.
-static CLIENT: Lazy<Client> = Lazy::new(Client::new);
-static NODE_CONNECTION_STRING: Lazy<Option<String>> = Lazy::new(|| {
-    dotenvy::var("NODE_CONNECTION_STRING")
-        .map_err(|e| error!("Failed to get NODE_CONNECTION_STRING: {}", e))
-        .ok()
-});
+static CLIENT: OnceLock<Client> = OnceLock::new();
+static NODE_CONNECTION_STRING: OnceLock<Option<String>> = OnceLock::new();
 
 // Arbitrarily set, can be set somewhere else.
 const MAX_RETRIES: u8 = 5;
@@ -331,20 +327,35 @@ async fn make_rpc_call<T: Serialize, R: for<'de> Deserialize<'de>>(
     params: &T,
     timeout: Option<u64>,
 ) -> Result<R> {
-    let connection_string = (*NODE_CONNECTION_STRING).as_ref().ok_or_else(|| {
-        BlockchainError::configuration("NODE_CONNECTION_STRING", "Environment variable not set")
-    })?;
+    let connection_string = NODE_CONNECTION_STRING
+        .get_or_init(|| {
+            dotenvy::var("NODE_CONNECTION_STRING")
+                .map_err(|e| error!("Failed to get NODE_CONNECTION_STRING: {}", e))
+                .ok()
+        })
+        .as_ref()
+        .ok_or_else(|| {
+            BlockchainError::configuration("NODE_CONNECTION_STRING", "Environment variable not set")
+        })?;
 
     let raw_response = match timeout {
         Some(seconds) => {
             CLIENT
+                .get_or_init(Client::new)
                 .post(connection_string)
                 .timeout(Duration::from_secs(seconds))
                 .json(params)
                 .send()
                 .await
         }
-        None => CLIENT.post(connection_string).json(params).send().await,
+        None => {
+            CLIENT
+                .get_or_init(Client::new)
+                .post(connection_string)
+                .json(params)
+                .send()
+                .await
+        }
     };
 
     let raw_response = match raw_response {
