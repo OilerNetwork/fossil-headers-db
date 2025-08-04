@@ -12,7 +12,7 @@
 //! - [`commands`] - Legacy CLI indexing operations (update/fix modes)
 //! - [`errors`] - Domain-specific error types for blockchain operations
 //! - [`indexer`] - Modern indexing services (batch and quick indexing)
-//! - [`types`] - Type-safe domain models (BlockNumber, BlockHash, etc.)
+//! - [`types`] - Type-safe domain models (`BlockNumber`, `BlockHash`, etc.)
 //!
 //! ### Facade Modules (Simplified Interfaces)
 //! - [`database`] - Database operations with hidden connection management

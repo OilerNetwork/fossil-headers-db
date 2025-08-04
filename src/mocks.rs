@@ -8,6 +8,11 @@
 //! - [`MockEthereumRpcProvider`] - Mock implementation of [`crate::rpc::EthereumRpcProvider`]
 //! - [`MockDatabaseProvider`] - Mock implementation for database operations
 //!
+
+#![allow(clippy::unwrap_used)]
+#![allow(clippy::expect_used)]
+#![allow(clippy::arithmetic_side_effects)]
+#![allow(dead_code)]
 //! ## Usage
 //!
 //! These mocks are only available when building with the `cfg(test)` attribute and are

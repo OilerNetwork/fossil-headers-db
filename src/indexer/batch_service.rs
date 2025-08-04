@@ -7,7 +7,7 @@ use std::{
 };
 
 use eyre::{eyre, Result};
-use futures::future::try_join_all;
+use futures::future::join_all;
 use tokio::{sync::Semaphore, task};
 use tracing::{error, info, warn};
 
@@ -37,7 +37,8 @@ pub struct BatchIndexConfig {
 }
 
 impl BatchIndexConfig {
-    pub fn builder() -> BatchIndexConfigBuilder {
+    #[must_use]
+    pub const fn builder() -> BatchIndexConfigBuilder {
         BatchIndexConfigBuilder::new()
     }
 }
@@ -67,7 +68,8 @@ pub struct BatchIndexConfigBuilder {
 }
 
 impl BatchIndexConfigBuilder {
-    pub fn new() -> Self {
+    #[must_use]
+    pub const fn new() -> Self {
         Self {
             max_retries: 10,
             poll_interval: 10,
@@ -79,7 +81,8 @@ impl BatchIndexConfigBuilder {
         }
     }
 
-    pub fn high_throughput() -> Self {
+    #[must_use]
+    pub const fn high_throughput() -> Self {
         Self::new()
             .index_batch_size(200)
             .max_concurrent_requests(50)
@@ -87,7 +90,8 @@ impl BatchIndexConfigBuilder {
             .rpc_timeout(600)
     }
 
-    pub fn conservative() -> Self {
+    #[must_use]
+    pub const fn conservative() -> Self {
         Self::new()
             .index_batch_size(10)
             .max_concurrent_requests(3)
@@ -95,7 +99,8 @@ impl BatchIndexConfigBuilder {
             .max_retries(5)
     }
 
-    pub fn testing() -> Self {
+    #[must_use]
+    pub const fn testing() -> Self {
         Self::new()
             .index_batch_size(2)
             .max_concurrent_requests(1)
@@ -103,37 +108,44 @@ impl BatchIndexConfigBuilder {
             .max_retries(1)
     }
 
-    pub fn max_retries(mut self, max_retries: u8) -> Self {
+    #[must_use]
+    pub const fn max_retries(mut self, max_retries: u8) -> Self {
         self.max_retries = max_retries;
         self
     }
 
-    pub fn poll_interval(mut self, poll_interval: u32) -> Self {
+    #[must_use]
+    pub const fn poll_interval(mut self, poll_interval: u32) -> Self {
         self.poll_interval = poll_interval;
         self
     }
 
-    pub fn rpc_timeout(mut self, rpc_timeout: u32) -> Self {
+    #[must_use]
+    pub const fn rpc_timeout(mut self, rpc_timeout: u32) -> Self {
         self.rpc_timeout = rpc_timeout;
         self
     }
 
-    pub fn index_batch_size(mut self, index_batch_size: u32) -> Self {
+    #[must_use]
+    pub const fn index_batch_size(mut self, index_batch_size: u32) -> Self {
         self.index_batch_size = index_batch_size;
         self
     }
 
-    pub fn should_index_txs(mut self, should_index_txs: bool) -> Self {
+    #[must_use]
+    pub const fn should_index_txs(mut self, should_index_txs: bool) -> Self {
         self.should_index_txs = should_index_txs;
         self
     }
 
-    pub fn max_concurrent_requests(mut self, max_concurrent_requests: usize) -> Self {
+    #[must_use]
+    pub const fn max_concurrent_requests(mut self, max_concurrent_requests: usize) -> Self {
         self.max_concurrent_requests = max_concurrent_requests;
         self
     }
 
-    pub fn task_timeout(mut self, task_timeout: u32) -> Self {
+    #[must_use]
+    pub const fn task_timeout(mut self, task_timeout: u32) -> Self {
         self.task_timeout = task_timeout;
         self
     }
@@ -210,16 +222,16 @@ impl<T> BatchIndexer<T>
 where
     T: EthereumRpcProvider + Send + Sync + 'static,
 {
-    pub async fn new(
+    pub const fn new(
         config: BatchIndexConfig,
         db: Arc<DbConnection>,
         rpc_provider: Arc<T>,
         should_terminate: Arc<AtomicBool>,
-    ) -> BatchIndexer<T> {
+    ) -> Self {
         Self {
+            config,
             db,
             rpc_provider,
-            config,
             should_terminate,
         }
     }
@@ -233,55 +245,63 @@ where
         // 3. if not fully indexed, index the block in batches (20 seems to be good for batch, but should be adjustable)
         // 4. if it is fully indexed, do nothing (maybe we could exit this too?)
         while !self.should_terminate.load(Ordering::Relaxed) {
-            let current_index_metadata = match get_index_metadata(self.db.clone()).await {
-                Ok(metadata) => {
-                    if let Some(metadata) = metadata {
-                        metadata
-                    } else {
-                        error!("[batch_index] Error getting index metadata");
-                        return Err(eyre!("Error getting index metadata: metadata not found."));
-                    }
-                }
-                Err(e) => {
-                    error!("[batch_index] Error getting index metadata: {}", e);
-                    return Err(e);
-                }
-            };
+            let current_index_metadata = self.get_current_metadata().await?;
 
             let index_start_block_number = current_index_metadata.indexing_starting_block_number;
-            let current_backfilling_block_number =
-                if let Some(block_number) = current_index_metadata.backfilling_block_number {
-                    block_number
-                } else {
-                    index_start_block_number
-                };
+            let current_backfilling_block_number = current_index_metadata
+                .backfilling_block_number
+                .unwrap_or(index_start_block_number);
 
-            if current_backfilling_block_number == 0 {
-                info!("[batch_index] Backfilling complete, terminating backfilling process.");
+            if Self::is_backfilling_complete(current_backfilling_block_number) {
                 break;
             }
 
-            if current_backfilling_block_number > 0 {
-                let backfilling_target_block =
-                    current_backfilling_block_number - i64::from(self.config.index_batch_size);
-                let starting_block_number: i64 = if backfilling_target_block < 0 {
-                    0
-                } else {
-                    backfilling_target_block
-                };
+            let (starting_block, ending_block) = self
+                .calculate_block_range(current_backfilling_block_number, index_start_block_number);
 
-                self.index_block_range(
-                    starting_block_number,
-                    current_backfilling_block_number,
-                    &self.should_terminate,
-                )
+            self.index_block_range(starting_block, ending_block, &self.should_terminate)
                 .await?;
-            } else {
-                info!("[batch_index] Backfilling complete, terminating backfilling process.");
-                break;
-            }
         }
         Ok(())
+    }
+
+    async fn get_current_metadata(
+        &self,
+    ) -> Result<crate::repositories::index_metadata::IndexMetadataDto> {
+        match get_index_metadata(self.db.clone()).await {
+            Ok(Some(metadata)) => Ok(metadata),
+            Ok(None) => {
+                error!("[batch_index] Error getting index metadata");
+                Err(eyre!("Error getting index metadata: metadata not found."))
+            }
+            Err(e) => {
+                error!("[batch_index] Error getting index metadata: {}", e);
+                Err(e)
+            }
+        }
+    }
+
+    fn is_backfilling_complete(current_backfilling_block_number: i64) -> bool {
+        if current_backfilling_block_number <= 0 {
+            info!("[batch_index] Backfilling complete, terminating backfilling process.");
+            return true;
+        }
+        false
+    }
+
+    fn calculate_block_range(
+        &self,
+        current_backfilling_block_number: i64,
+        _index_start_block_number: i64,
+    ) -> (i64, i64) {
+        let backfilling_target_block =
+            current_backfilling_block_number - i64::from(self.config.index_batch_size);
+        let starting_block_number: i64 = if backfilling_target_block < 0 {
+            0
+        } else {
+            backfilling_target_block
+        };
+        (starting_block_number, current_backfilling_block_number)
     }
 
     // Indexing a block range, inclusive.
@@ -291,7 +311,7 @@ where
         ending_block: i64,
         should_terminate: &AtomicBool,
     ) -> Result<()> {
-        let block_range: Vec<i64> = (starting_block..ending_block + 1).collect();
+        let block_range: Vec<i64> = (starting_block..=ending_block).collect();
         let semaphore = Arc::new(Semaphore::new(self.config.max_concurrent_requests));
 
         for i in 0..self.config.max_retries {
@@ -300,111 +320,181 @@ where
                 break;
             }
 
-            let timeout = self.config.rpc_timeout;
+            let (block_headers, error_count, failed_blocks) =
+                self.fetch_block_headers(&block_range, &semaphore).await?;
 
-            let rpc_block_headers_futures: Vec<_> = block_range
-                .clone()
-                .into_iter()
-                .map(|block_number| {
-                    let provider = self.rpc_provider.clone();
-                    let should_index_txs = self.config.should_index_txs;
-                    let permit = semaphore.clone();
-                    let task_timeout = self.config.task_timeout;
-
-                    task::spawn(async move {
-                        let _permit = permit
-                            .acquire()
-                            .await
-                            .map_err(|_| eyre!("Semaphore closed"))?;
-
-                        // Add timeout to the entire RPC operation
-                        tokio::time::timeout(
-                            Duration::from_secs(task_timeout.into()),
-                            provider.get_full_block_by_number(
-                                BlockNumber::from_trusted(block_number),
-                                should_index_txs,
-                                Some(timeout.into()),
-                            ),
-                        )
-                        .await
-                        .map_err(|_| eyre!("Task timeout getting block {}", block_number))?
-                    })
-                })
-                .collect();
-
-            let rpc_block_headers_response = try_join_all(rpc_block_headers_futures).await?;
-
-            let mut block_headers = Vec::with_capacity(rpc_block_headers_response.len());
-            let mut error_count = 0;
-            let mut failed_blocks = Vec::new();
-
-            for (idx, header_result) in rpc_block_headers_response.into_iter().enumerate() {
-                let block_num = starting_block + idx as i64;
-                match header_result {
-                    Ok(header) => {
-                        block_headers.push(header);
-                    }
-                    Err(e) => {
-                        error_count += 1;
-                        failed_blocks.push(block_num);
-                        warn!(
-                            "[batch_index] Error retrieving block {}. error: {}",
-                            block_num, e
-                        )
-                    }
-                }
-            }
-
-            // Implement backpressure based on error rate
-            let error_rate = error_count as f64 / block_range.len() as f64;
-            if error_rate > 0.2 {
-                warn!(
-                    "[batch_index] High error rate ({:.1}%) in range {} to {}. Failed blocks: {:?}",
-                    error_rate * 100.0,
-                    starting_block,
-                    ending_block,
-                    failed_blocks
-                );
-
-                // Apply exponential backoff for high error rates
-                let backoff_secs = if error_rate > 0.5 { 10 } else { 5 };
-                tokio::time::sleep(Duration::from_secs(backoff_secs)).await;
-            }
+            self.apply_backpressure_if_needed(
+                error_count,
+                &block_range,
+                starting_block,
+                ending_block,
+                &failed_blocks,
+            )
+            .await;
 
             if error_count == 0 {
-                let mut db_tx = self.db.pool.begin().await?;
-
-                if self.config.should_index_txs {
-                    insert_block_header_query(&mut db_tx, block_headers).await?;
-                } else {
-                    insert_block_header_only_query(&mut db_tx, block_headers).await?;
-                }
-
-                update_backfilling_block_number_query(&mut db_tx, starting_block).await?;
-
-                if starting_block == 0 {
-                    set_is_backfilling(&mut db_tx, false).await?;
-                }
-
-                // Commit at the end
-                db_tx.commit().await?;
-
-                info!(
-                    "[batch_index] Indexing block range from {} to {} complete.",
-                    starting_block, ending_block
-                );
+                self.save_blocks_to_database(block_headers, starting_block, ending_block)
+                    .await?;
                 return Ok(());
             }
 
             // If there's an error during rpc, retry.
             error!("[batch_index] Error encountered during rpc, retry no. {}. Re-running from block: {}", i, starting_block);
 
-            // Exponential backoff
-            let backoff = (i as u64).pow(2) * 5;
-            tokio::time::sleep(Duration::from_secs(backoff)).await;
+            self.apply_retry_backoff(i).await;
         }
 
         Err(eyre!("Max retries reached. Stopping batch indexing."))
+    }
+
+    async fn fetch_block_headers(
+        &self,
+        block_range: &[i64],
+        semaphore: &Arc<Semaphore>,
+    ) -> Result<(Vec<crate::rpc::BlockHeader>, i32, Vec<i64>)> {
+        let rpc_block_headers_futures = self.create_block_fetch_tasks(block_range, semaphore);
+        let rpc_block_headers_response = join_all(rpc_block_headers_futures).await;
+
+        Ok(Self::process_block_responses(
+            rpc_block_headers_response,
+            block_range[0],
+        ))
+    }
+
+    fn create_block_fetch_tasks(
+        &self,
+        block_range: &[i64],
+        semaphore: &Arc<Semaphore>,
+    ) -> Vec<task::JoinHandle<Result<crate::rpc::BlockHeader, eyre::Report>>> {
+        let timeout = self.config.rpc_timeout;
+        let should_index_txs = self.config.should_index_txs;
+        let task_timeout = self.config.task_timeout;
+
+        block_range
+            .iter()
+            .map(|&block_number| {
+                let provider = self.rpc_provider.clone();
+                let permit = semaphore.clone();
+
+                task::spawn(async move {
+                    let _permit = permit
+                        .acquire()
+                        .await
+                        .map_err(|_| eyre!("Semaphore closed"))?;
+
+                    // Add timeout to the entire RPC operation
+                    tokio::time::timeout(
+                        Duration::from_secs(task_timeout.into()),
+                        provider.get_full_block_by_number(
+                            BlockNumber::from_trusted(block_number),
+                            should_index_txs,
+                            Some(timeout.into()),
+                        ),
+                    )
+                    .await
+                    .map_err(|_| eyre!("Task timeout getting block {}", block_number))?
+                    .map_err(|e| eyre!("RPC error: {}", e))
+                })
+            })
+            .collect()
+    }
+
+    fn process_block_responses(
+        responses: Vec<
+            Result<Result<crate::rpc::BlockHeader, eyre::Report>, tokio::task::JoinError>,
+        >,
+        starting_block: i64,
+    ) -> (Vec<crate::rpc::BlockHeader>, i32, Vec<i64>) {
+        let mut block_headers = Vec::with_capacity(responses.len());
+        let mut error_count = 0;
+        let mut failed_blocks = Vec::new();
+
+        for (idx, join_result) in responses.into_iter().enumerate() {
+            let block_num = starting_block + i64::try_from(idx).unwrap_or(0);
+            match join_result {
+                Ok(Ok(header)) => {
+                    block_headers.push(header);
+                }
+                Ok(Err(e)) => {
+                    error_count += 1;
+                    failed_blocks.push(block_num);
+                    warn!(
+                        "[batch_index] Error retrieving block {}. error: {}",
+                        block_num, e
+                    );
+                }
+                Err(e) => {
+                    error_count += 1;
+                    failed_blocks.push(block_num);
+                    warn!(
+                        "[batch_index] Error retrieving block {}. error: {}",
+                        block_num, e
+                    );
+                }
+            }
+        }
+
+        (block_headers, error_count, failed_blocks)
+    }
+
+    #[allow(clippy::cast_precision_loss)]
+    async fn apply_backpressure_if_needed(
+        &self,
+        error_count: i32,
+        block_range: &[i64],
+        starting_block: i64,
+        ending_block: i64,
+        failed_blocks: &[i64],
+    ) {
+        let error_rate = f64::from(error_count) / block_range.len() as f64;
+        if error_rate > 0.2 {
+            warn!(
+                "[batch_index] High error rate ({:.1}%) in range {} to {}. Failed blocks: {:?}",
+                error_rate * 100.0,
+                starting_block,
+                ending_block,
+                failed_blocks
+            );
+
+            // Apply exponential backoff for high error rates
+            let backoff_secs = if error_rate > 0.5 { 10 } else { 5 };
+            tokio::time::sleep(Duration::from_secs(backoff_secs)).await;
+        }
+    }
+
+    async fn save_blocks_to_database(
+        &self,
+        block_headers: Vec<crate::rpc::BlockHeader>,
+        starting_block: i64,
+        ending_block: i64,
+    ) -> Result<()> {
+        let mut db_tx = self.db.pool.begin().await?;
+
+        if self.config.should_index_txs {
+            insert_block_header_query(&mut db_tx, block_headers).await?;
+        } else {
+            insert_block_header_only_query(&mut db_tx, block_headers).await?;
+        }
+
+        update_backfilling_block_number_query(&mut db_tx, starting_block).await?;
+
+        if starting_block == 0 {
+            set_is_backfilling(&mut db_tx, false).await?;
+        }
+
+        // Commit at the end
+        db_tx.commit().await?;
+
+        info!(
+            "[batch_index] Indexing block range from {} to {} complete.",
+            starting_block, ending_block
+        );
+        Ok(())
+    }
+
+    async fn apply_retry_backoff(&self, attempt: u8) {
+        let backoff = u64::from(attempt).pow(2) * 5;
+        tokio::time::sleep(Duration::from_secs(backoff)).await;
     }
 }
 
@@ -453,7 +543,7 @@ mod tests {
         let mock_rpc = Arc::new(MockRpcProvider::new());
         let should_terminate = Arc::new(AtomicBool::new(false));
 
-        let indexer = BatchIndexer::new(config, db, mock_rpc, should_terminate).await;
+        let indexer = BatchIndexer::new(config, db, mock_rpc, should_terminate);
 
         assert_eq!(indexer.config.max_retries, 10);
         assert_eq!(indexer.config.poll_interval, 10);
@@ -491,8 +581,7 @@ mod tests {
             .await
             .unwrap();
 
-        let indexer =
-            BatchIndexer::new(config, db.clone(), mock_rpc, should_terminate.clone()).await;
+        let indexer = BatchIndexer::new(config, db.clone(), mock_rpc, should_terminate.clone());
 
         task::spawn(async move {
             indexer.index().await.unwrap();
@@ -565,8 +654,7 @@ mod tests {
             .await
             .unwrap();
 
-        let indexer =
-            BatchIndexer::new(config, db.clone(), mock_rpc, should_terminate.clone()).await;
+        let indexer = BatchIndexer::new(config, db.clone(), mock_rpc, should_terminate.clone());
 
         task::spawn(async move {
             indexer.index().await.unwrap();
@@ -653,8 +741,7 @@ mod tests {
             .await
             .unwrap();
 
-        let indexer =
-            BatchIndexer::new(config, db.clone(), mock_rpc, should_terminate.clone()).await;
+        let indexer = BatchIndexer::new(config, db.clone(), mock_rpc, should_terminate.clone());
 
         task::spawn(async move {
             indexer.index().await.unwrap();
@@ -720,8 +807,7 @@ mod tests {
         let should_terminate = Arc::new(AtomicBool::new(false));
 
         // The metadata table would not exist without initializing it.
-        let indexer =
-            BatchIndexer::new(config, db.clone(), mock_rpc, should_terminate.clone()).await;
+        let indexer = BatchIndexer::new(config, db.clone(), mock_rpc, should_terminate.clone());
 
         let result = indexer.index().await;
         assert!(result.is_err());
@@ -754,8 +840,7 @@ mod tests {
             .await
             .unwrap();
 
-        let indexer =
-            BatchIndexer::new(config, db.clone(), mock_rpc, should_terminate.clone()).await;
+        let indexer = BatchIndexer::new(config, db.clone(), mock_rpc, should_terminate.clone());
 
         let result = indexer.index().await;
         assert!(result.is_err());

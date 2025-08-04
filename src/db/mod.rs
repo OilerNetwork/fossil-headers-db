@@ -6,7 +6,7 @@
 //!
 //! ## Key Features
 //!
-//! - **Connection Pooling**: Managed PostgreSQL connection pool with configurable limits
+//! - **Connection Pooling**: Managed `PostgreSQL` connection pool with configurable limits
 //! - **Retry Logic**: Built-in retry mechanisms with exponential backoff for resilient operations
 //! - **Gap Detection**: Algorithms to identify missing blocks in the stored data
 //! - **Batch Operations**: Efficient bulk insertion of blockchain data
@@ -34,7 +34,7 @@
 //! use fossil_headers_db::db::{get_db_pool, get_last_stored_blocknumber};
 //!
 //! # async fn example() -> eyre::Result<()> {
-//! // Get database connection pool  
+//! // Get database connection pool
 //! let pool = get_db_pool().await?;
 //!
 //! // Get the latest stored block number
@@ -147,7 +147,7 @@ pub async fn get_db_pool() -> Result<Arc<Pool<Postgres>>> {
             })?;
         let arc_pool = Arc::new(pool);
         match DB_POOL.set(arc_pool.clone()) {
-            Ok(_) => Ok(arc_pool),
+            Ok(()) => Ok(arc_pool),
             Err(_) => DB_POOL
                 .get()
                 .ok_or_else(|| {
@@ -305,7 +305,7 @@ pub async fn get_last_stored_blocknumber() -> Result<BlockNumber> {
 pub async fn find_first_gap(start: BlockNumber, end: BlockNumber) -> Result<Option<BlockNumber>> {
     let pool = get_db_pool().await?;
     let result: Option<(i64,)> = sqlx::query_as(
-        r#"
+        r"
         WITH RECURSIVE number_series(n) AS (
             SELECT $1
             UNION ALL
@@ -314,7 +314,7 @@ pub async fn find_first_gap(start: BlockNumber, end: BlockNumber) -> Result<Opti
         SELECT n FROM number_series
         WHERE n NOT IN (SELECT number FROM blockheaders WHERE number BETWEEN $1 AND $2)
         LIMIT 1
-        "#,
+        ",
     )
     .bind(start.value())
     .bind(end.value())
@@ -327,12 +327,12 @@ pub async fn find_first_gap(start: BlockNumber, end: BlockNumber) -> Result<Opti
 
 /**
  * This finds the null data by querying the blockheaders table.
- * Included fields is based on the reth primitives defined in https://reth.rs/docs/reth_primitives/struct.Header.html
+ * Included fields is based on the reth primitives defined in <https://reth.rs/docs/reth_primitives/struct.Header.html>
  */
 pub async fn find_null_data(start: BlockNumber, end: BlockNumber) -> Result<Vec<BlockNumber>> {
     let pool = get_db_pool().await?;
     let result: Vec<(i64,)> = sqlx::query_as(
-        r#"
+        r"
         SELECT number FROM blockheaders
             WHERE (block_hash IS NULL
             OR gas_limit IS NULL
@@ -350,7 +350,7 @@ pub async fn find_null_data(start: BlockNumber, end: BlockNumber) -> Result<Vec<
             OR mix_hash IS NULL)
             AND number BETWEEN $1 AND $2
             ORDER BY number ASC
-        "#,
+        ",
     )
     .bind(start.value())
     .bind(end.value())
@@ -364,26 +364,22 @@ pub async fn find_null_data(start: BlockNumber, end: BlockNumber) -> Result<Vec<
         .collect())
 }
 
-pub async fn write_blockheader(block_header: BlockHeaderWithFullTransaction) -> Result<()> {
-    let pool = get_db_pool().await?;
-    let mut tx = pool.begin().await?;
-
-    // // Print block_header details
-    // info!("Block Header Details: {:?}", block_header);
-
-    // Insert block header
+async fn insert_block_header(
+    tx: &mut sqlx::Transaction<'_, sqlx::Postgres>,
+    block_header: &BlockHeaderWithFullTransaction,
+) -> Result<bool> {
     let result = sqlx::query(
-        r#"
+        r"
         INSERT INTO blockheaders (
             block_hash, number, gas_limit, gas_used, base_fee_per_gas,
             nonce, transaction_root, receipts_root, state_root,
             parent_hash, miner, logs_bloom, difficulty, totalDifficulty,
-            sha3_uncles, timestamp, extra_data, mix_hash, withdrawals_root, 
+            sha3_uncles, timestamp, extra_data, mix_hash, withdrawals_root,
             blob_gas_used, excess_blob_gas, parent_beacon_block_root
         )
         VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18, $19, $20, $21, $22)
         ON CONFLICT (number)
-        DO UPDATE SET 
+        DO UPDATE SET
             block_hash = EXCLUDED.block_hash,
             gas_limit = EXCLUDED.gas_limit,
             gas_used = EXCLUDED.gas_used,
@@ -405,7 +401,7 @@ pub async fn write_blockheader(block_header: BlockHeaderWithFullTransaction) -> 
             blob_gas_used = EXCLUDED.blob_gas_used,
             excess_blob_gas = EXCLUDED.excess_blob_gas,
             parent_beacon_block_root = EXCLUDED.parent_beacon_block_root;
-        "#,
+        ",
     )
     .bind(&block_header.hash)
     .bind(convert_hex_string_to_i64(&block_header.number)?)
@@ -429,7 +425,7 @@ pub async fn write_blockheader(block_header: BlockHeaderWithFullTransaction) -> 
     .bind(&block_header.blob_gas_used)
     .bind(&block_header.excess_blob_gas)
     .bind(&block_header.parent_beacon_block_root)
-    .execute(&mut *tx) // Changed this line
+    .execute(&mut **tx)
     .await
     .map_err(|e| {
         error!("Detailed error: {:?}", e);
@@ -441,70 +437,88 @@ pub async fn write_blockheader(block_header: BlockHeaderWithFullTransaction) -> 
             "Block already exists: -- block number: {}, block hash: {}",
             block_header.number, block_header.hash
         );
+        return Ok(false);
+    }
+    info!(
+        "Inserted block number: {}, block hash: {}",
+        block_header.number, block_header.hash
+    );
+    Ok(true)
+}
+
+async fn insert_transactions(
+    tx: &mut sqlx::Transaction<'_, sqlx::Postgres>,
+    block_header: &BlockHeaderWithFullTransaction,
+) -> Result<()> {
+    if block_header.transactions.is_empty() {
         return Ok(());
-    } else {
-        info!(
-            "Inserted block number: {}, block hash: {}",
-            block_header.number, block_header.hash
-        );
     }
 
-    // Insert transactions
-    if !block_header.transactions.is_empty() {
-        // Pre-process transactions to handle hex conversions with proper error handling
-        let processed_transactions: Result<Vec<_>> = block_header
-            .transactions
-            .iter()
-            .map(|tx| {
-                let tx_block_number = convert_hex_string_to_i64(&tx.block_number)
-                    .map_err(|_| BlockchainError::invalid_hex(&tx.block_number))?;
-                let tx_index = convert_hex_string_to_i64(&tx.transaction_index)
-                    .map_err(|_| BlockchainError::invalid_hex(&tx.transaction_index))?;
+    let processed_transactions: Result<Vec<_>> = block_header
+        .transactions
+        .iter()
+        .map(|tx| {
+            let tx_block_number = convert_hex_string_to_i64(&tx.block_number)
+                .map_err(|_| BlockchainError::invalid_hex(&tx.block_number))?;
+            let tx_index = convert_hex_string_to_i64(&tx.transaction_index)
+                .map_err(|_| BlockchainError::invalid_hex(&tx.transaction_index))?;
 
-                Ok((tx, tx_block_number, tx_index))
-            })
-            .collect();
+            Ok((tx, tx_block_number, tx_index))
+        })
+        .collect();
 
-        let processed_transactions = processed_transactions?;
+    let processed_transactions = processed_transactions?;
 
-        let mut query_builder: QueryBuilder<Postgres> = QueryBuilder::new(
-            "INSERT INTO transactions (
-                block_number, transaction_hash, transaction_index,
-                from_addr, to_addr, value, gas_price,
-                max_priority_fee_per_gas, max_fee_per_gas, gas, chain_id
-            ) ",
-        );
+    let mut query_builder: QueryBuilder<Postgres> = QueryBuilder::new(
+        "INSERT INTO transactions (
+            block_number, transaction_hash, transaction_index,
+            from_addr, to_addr, value, gas_price,
+            max_priority_fee_per_gas, max_fee_per_gas, gas, chain_id
+        ) ",
+    );
 
-        query_builder.push_values(
-            processed_transactions.iter(),
-            |mut b: Separated<'_, '_, Postgres, &'static str>, (tx, tx_block_number, tx_index)| {
-                b.push_bind(*tx_block_number)
-                    .push_bind(&tx.hash)
-                    .push_bind(*tx_index)
-                    .push_bind(&tx.from)
-                    .push_bind(&tx.to)
-                    .push_bind(&tx.value)
-                    .push_bind(tx.gas_price.as_deref().unwrap_or("0"))
-                    .push_bind(tx.max_priority_fee_per_gas.as_deref().unwrap_or("0"))
-                    .push_bind(tx.max_fee_per_gas.as_deref().unwrap_or("0"))
-                    .push_bind(&tx.gas)
-                    .push_bind(&tx.chain_id);
-            },
-        );
+    query_builder.push_values(
+        processed_transactions.iter(),
+        |mut b: Separated<'_, '_, Postgres, &'static str>, (tx_data, tx_block_number, tx_index)| {
+            b.push_bind(*tx_block_number)
+                .push_bind(&tx_data.hash)
+                .push_bind(*tx_index)
+                .push_bind(&tx_data.from)
+                .push_bind(&tx_data.to)
+                .push_bind(&tx_data.value)
+                .push_bind(tx_data.gas_price.as_deref().unwrap_or("0"))
+                .push_bind(tx_data.max_priority_fee_per_gas.as_deref().unwrap_or("0"))
+                .push_bind(tx_data.max_fee_per_gas.as_deref().unwrap_or("0"))
+                .push_bind(&tx_data.gas)
+                .push_bind(&tx_data.chain_id);
+        },
+    );
 
-        query_builder.push(" ON CONFLICT (transaction_hash) DO NOTHING");
+    query_builder.push(" ON CONFLICT (transaction_hash) DO NOTHING");
 
-        let query = query_builder.build();
-        let result = query.execute(&mut *tx).await.map_err(|e| {
-            BlockchainError::database_query(format!("Failed to insert transactions: {e}"))
-        })?;
+    let query = query_builder.build();
+    let result = query.execute(&mut **tx).await.map_err(|e| {
+        BlockchainError::database_query(format!("Failed to insert transactions: {e}"))
+    })?;
 
-        info!(
-            "Inserted {} transactions for block {}",
-            result.rows_affected(),
-            block_header.number
-        );
+    info!(
+        "Inserted {} transactions for block {}",
+        result.rows_affected(),
+        block_header.number
+    );
+    Ok(())
+}
+
+pub async fn write_blockheader(block_header: BlockHeaderWithFullTransaction) -> Result<()> {
+    let pool = get_db_pool().await?;
+    let mut tx = pool.begin().await?;
+
+    let block_inserted = insert_block_header(&mut tx, &block_header).await?;
+    if !block_inserted {
+        return Ok(());
     }
+
+    insert_transactions(&mut tx, &block_header).await?;
 
     tx.commit().await.map_err(|e| {
         BlockchainError::database_transaction(format!("Failed to commit transaction: {e}"))
@@ -537,7 +551,7 @@ where
 }
 
 #[allow(clippy::all)]
-fn is_transient_error(e: &BlockchainError) -> bool {
+const fn is_transient_error(e: &BlockchainError) -> bool {
     // Check for transient error types
     match e {
         BlockchainError::DatabaseConnectionFailed { .. } => true,

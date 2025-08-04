@@ -45,3 +45,56 @@ path = "src/main.rs"
 [[bin]]
 name = "fossil_indexer"
 path = "src/indexer/main.rs"
+
+[lints.rust]
+# Deny unsafe code patterns
+unsafe_code = "forbid"
+# Allow missing docs for now (too many to fix at once)
+missing_docs = "allow"
+# Warn on unused items
+unused = { level = "warn", priority = -1 }
+# Warn on deprecated features
+deprecated = "warn"
+# Deny future incompatible patterns
+future_incompatible = { level = "deny", priority = -1 }
+
+[lints.clippy]
+# Enable pedantic lints for high code quality (but as warnings, not errors)
+pedantic = { level = "warn", priority = -1 }
+# Enable nursery lints for cutting-edge patterns (but as warnings)
+nursery = { level = "warn", priority = -1 }
+
+# Core safety and correctness (deny these)
+correctness = { level = "deny", priority = -1 }
+suspicious = { level = "deny", priority = -1 }
+
+# Quality lints (warn only)
+complexity = { level = "warn", priority = -1 }
+perf = { level = "warn", priority = -1 }
+style = { level = "warn", priority = -1 }
+
+# Blockchain/crypto specific safety lints
+arithmetic_side_effects = "allow" # Too many false positives in property tests        # Precision issues in financial calculations
+print_stdout = "warn"             # Prefer structured logging
+print_stderr = "warn"             # Prefer structured logging
+dbg_macro = "warn"                # Remove debug prints in production
+todo = "warn"                     # Track TODOs
+unimplemented = "warn"            # Track unfinished code
+panic = "warn"                    # Prefer Result types
+unwrap_used = "warn"              # Prefer proper error handling
+expect_used = "warn"              # Prefer proper error handling
+
+# Documentation and API design
+missing_docs_in_private_items = "allow" # Don't require docs for private items
+missing_errors_doc = "allow"            # Allow missing error docs for now
+missing_panics_doc = "allow"            # Allow missing panic docs for now
+missing_safety_doc = "warn"             # Document unsafe code
+
+# Performance and efficiency
+needless_collect = "warn"
+redundant_clone = "warn"
+redundant_allocation = "warn"
+large_types_passed_by_value = "warn"
+
+# Security and robustness
+map_unwrap_or = "warn" # Renamed from option_map_unwrap_or variants

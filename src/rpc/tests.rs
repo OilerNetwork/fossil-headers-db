@@ -1,7 +1,10 @@
 #[cfg(test)]
+#[allow(clippy::unwrap_used)]
+#[allow(clippy::expect_used)]
+#[allow(clippy::arithmetic_side_effects)]
+#[allow(unused_imports)]
 mod unit_tests {
     use super::super::*;
-    use crate::types::BlockNumber;
 
     #[tokio::test]
     async fn test_try_convert_full_tx_vector_success() {

@@ -105,14 +105,13 @@ fn convert_rpc_blockheader_to_dto(block_header: BlockHeader) -> Result<BlockHead
         withdrawals_root: block_header.withdrawals_root.clone(),
         blob_gas_used: block_header.blob_gas_used.clone(),
         excess_blob_gas: block_header.excess_blob_gas.clone(),
-        parent_beacon_block_root: block_header.parent_beacon_block_root.clone(),
+        parent_beacon_block_root: block_header.parent_beacon_block_root,
         receipts_root,
         state_root,
         transaction_root,
     })
 }
 
-#[allow(dead_code)]
 fn convert_rpc_transaction_to_dto(transaction: Transaction) -> Result<TransactionDto> {
     let block_number = convert_hex_string_to_i64(&transaction.block_number)?;
     let transaction_index = convert_hex_string_to_i32(&transaction.transaction_index)?;
@@ -124,17 +123,20 @@ fn convert_rpc_transaction_to_dto(transaction: Transaction) -> Result<Transactio
         from_addr: transaction.from.clone(),
         to_addr: transaction.to.clone(),
         value: transaction.value.clone(),
-        gas_price: transaction.gas_price.clone().unwrap_or("0".to_string()),
+        gas_price: transaction
+            .gas_price
+            .clone()
+            .unwrap_or_else(|| "0".to_string()),
         max_priority_fee_per_gas: transaction
             .max_priority_fee_per_gas
             .clone()
-            .unwrap_or("0".to_string()),
+            .unwrap_or_else(|| "0".to_string()),
         max_fee_per_gas: transaction
             .max_fee_per_gas
             .clone()
-            .unwrap_or("0".to_string()),
+            .unwrap_or_else(|| "0".to_string()),
         gas: transaction.gas.clone(),
-        chain_id: transaction.chain_id.clone(),
+        chain_id: transaction.chain_id,
     })
 }
 
@@ -147,7 +149,7 @@ pub async fn insert_block_header_query(
     let mut formatted_block_headers: Vec<BlockHeaderDto> = Vec::with_capacity(block_headers.len());
     let mut flattened_transactions = Vec::new();
 
-    for header in block_headers.iter() {
+    for header in &block_headers {
         let dto = convert_rpc_blockheader_to_dto(header.clone())?;
         formatted_block_headers.push(dto);
 
@@ -197,7 +199,7 @@ pub async fn insert_block_header_query(
     );
 
     query_builder.push(
-        r#"
+        r"
         ON CONFLICT (number)
             DO UPDATE SET
                 block_hash = EXCLUDED.block_hash,
@@ -220,7 +222,7 @@ pub async fn insert_block_header_query(
                 withdrawals_root = EXCLUDED.withdrawals_root,
                 blob_gas_used = EXCLUDED.blob_gas_used,
                 excess_blob_gas = EXCLUDED.excess_blob_gas,
-                parent_beacon_block_root = EXCLUDED.parent_beacon_block_root;"#,
+                parent_beacon_block_root = EXCLUDED.parent_beacon_block_root;",
     );
 
     query_builder.build().execute(&mut **db_tx).await?;
@@ -246,7 +248,7 @@ async fn insert_block_txs_query(
 
     // Pre-format and handle the potential error arising from the hex -> i64 conversion
     let mut formatted_transactions: Vec<TransactionDto> = Vec::with_capacity(transactions.len());
-    for transaction in transactions.iter() {
+    for transaction in &transactions {
         let dto = convert_rpc_transaction_to_dto(transaction.clone())?;
         formatted_transactions.push(dto);
     }
@@ -269,7 +271,7 @@ async fn insert_block_txs_query(
         },
     );
     query_builder.push(
-        r#"
+        r"
         ON CONFLICT (transaction_hash)
             DO UPDATE SET
                 block_number = EXCLUDED.block_number,
@@ -281,7 +283,7 @@ async fn insert_block_txs_query(
                 max_priority_fee_per_gas = EXCLUDED.max_priority_fee_per_gas,
                 max_fee_per_gas = EXCLUDED.max_fee_per_gas,
                 gas = EXCLUDED.gas,
-                chain_id = EXCLUDED.chain_id;"#,
+                chain_id = EXCLUDED.chain_id;",
     );
     query_builder.build().execute(&mut **db_tx).await?;
 
@@ -295,7 +297,7 @@ pub async fn insert_block_header_only_query(
 ) -> Result<()> {
     let mut formatted_block_headers: Vec<BlockHeaderDto> = Vec::with_capacity(block_headers.len());
 
-    for header in block_headers.iter() {
+    for header in &block_headers {
         let dto = convert_rpc_blockheader_to_dto(header.clone())?;
         formatted_block_headers.push(dto);
     }
@@ -340,7 +342,7 @@ pub async fn insert_block_header_only_query(
     );
 
     query_builder.push(
-        r#"
+        r"
         ON CONFLICT (number)
             DO UPDATE SET
                 block_hash = EXCLUDED.block_hash,
@@ -363,7 +365,7 @@ pub async fn insert_block_header_only_query(
                 withdrawals_root = EXCLUDED.withdrawals_root,
                 blob_gas_used = EXCLUDED.blob_gas_used,
                 excess_blob_gas = EXCLUDED.excess_blob_gas,
-                parent_beacon_block_root = EXCLUDED.parent_beacon_block_root;"#,
+                parent_beacon_block_root = EXCLUDED.parent_beacon_block_root;",
     );
 
     query_builder.build().execute(&mut **db_tx).await?;

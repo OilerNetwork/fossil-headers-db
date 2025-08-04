@@ -32,7 +32,8 @@ pub struct IndexingConfig {
 }
 
 impl IndexingConfig {
-    pub fn builder() -> IndexingConfigBuilder {
+    #[must_use]
+    pub const fn builder() -> IndexingConfigBuilder {
         IndexingConfigBuilder::new()
     }
 }
@@ -49,7 +50,8 @@ pub struct IndexingConfigBuilder {
 }
 
 impl IndexingConfigBuilder {
-    pub fn new() -> Self {
+    #[must_use]
+    pub const fn new() -> Self {
         Self {
             db_conn_string: None,
             node_conn_string: None,
@@ -62,7 +64,8 @@ impl IndexingConfigBuilder {
         }
     }
 
-    pub fn development() -> Self {
+    #[must_use]
+    pub const fn development() -> Self {
         Self::new()
             .max_retries(3)
             .poll_interval(5)
@@ -71,16 +74,8 @@ impl IndexingConfigBuilder {
             .index_batch_size(10)
     }
 
-    pub fn production() -> Self {
-        Self::new()
-            .max_retries(20)
-            .poll_interval(30)
-            .rpc_timeout(600)
-            .rpc_max_retries(10)
-            .index_batch_size(500)
-    }
-
-    pub fn testing() -> Self {
+    #[must_use]
+    pub const fn testing() -> Self {
         Self::new()
             .max_retries(1)
             .poll_interval(1)
@@ -89,42 +84,60 @@ impl IndexingConfigBuilder {
             .index_batch_size(5)
     }
 
+    #[must_use]
+    pub const fn production() -> Self {
+        Self::new()
+            .max_retries(10)
+            .poll_interval(10)
+            .rpc_timeout(300)
+            .rpc_max_retries(5)
+            .index_batch_size(100)
+    }
+
+    #[must_use]
     pub fn db_conn_string<S: Into<String>>(mut self, db_conn_string: S) -> Self {
         self.db_conn_string = Some(db_conn_string.into());
         self
     }
 
+    #[must_use]
     pub fn node_conn_string<S: Into<String>>(mut self, node_conn_string: S) -> Self {
         self.node_conn_string = Some(node_conn_string.into());
         self
     }
 
-    pub fn should_index_txs(mut self, should_index_txs: bool) -> Self {
+    #[must_use]
+    pub const fn should_index_txs(mut self, should_index_txs: bool) -> Self {
         self.should_index_txs = should_index_txs;
         self
     }
 
-    pub fn max_retries(mut self, max_retries: u8) -> Self {
+    #[must_use]
+    pub const fn max_retries(mut self, max_retries: u8) -> Self {
         self.max_retries = max_retries;
         self
     }
 
-    pub fn poll_interval(mut self, poll_interval: u32) -> Self {
+    #[must_use]
+    pub const fn poll_interval(mut self, poll_interval: u32) -> Self {
         self.poll_interval = poll_interval;
         self
     }
 
-    pub fn rpc_timeout(mut self, rpc_timeout: u32) -> Self {
+    #[must_use]
+    pub const fn rpc_timeout(mut self, rpc_timeout: u32) -> Self {
         self.rpc_timeout = rpc_timeout;
         self
     }
 
-    pub fn rpc_max_retries(mut self, rpc_max_retries: u32) -> Self {
+    #[must_use]
+    pub const fn rpc_max_retries(mut self, rpc_max_retries: u32) -> Self {
         self.rpc_max_retries = rpc_max_retries;
         self
     }
 
-    pub fn index_batch_size(mut self, index_batch_size: u32) -> Self {
+    #[must_use]
+    pub const fn index_batch_size(mut self, index_batch_size: u32) -> Self {
         self.index_batch_size = index_batch_size;
         self
     }
@@ -192,12 +205,42 @@ pub async fn start_indexing_services(
     indexing_config: IndexingConfig,
     should_terminate: Arc<AtomicBool>,
 ) -> Result<()> {
-    // Setup database connection
+    let (db, rpc_client) = setup_database_and_rpc(&indexing_config).await?;
+
+    initialize_index_metadata(db.clone(), rpc_client.clone()).await?;
+
+    let router_handle = spawn_router_service(should_terminate.clone());
+    let quick_indexer_handle = spawn_quick_indexer_service(
+        &indexing_config,
+        db.clone(),
+        rpc_client.clone(),
+        should_terminate.clone(),
+    )?;
+    let batch_indexer_handle = spawn_batch_indexer_service(
+        &indexing_config,
+        db.clone(),
+        rpc_client.clone(),
+        should_terminate.clone(),
+    )?;
+
+    wait_for_thread_completion(vec![
+        router_handle,
+        quick_indexer_handle,
+        batch_indexer_handle,
+    ])
+    .await?;
+
+    Ok(())
+}
+
+async fn setup_database_and_rpc(
+    indexing_config: &IndexingConfig,
+) -> Result<(Arc<DbConnection>, Arc<EthereumJsonRpcClient>)> {
     info!("Connecting to DB");
-    let db = DbConnection::new(indexing_config.db_conn_string).await?;
+    let db = DbConnection::new(indexing_config.db_conn_string.clone()).await?;
 
     let rpc_client = Arc::new(EthereumJsonRpcClient::new(
-        indexing_config.node_conn_string,
+        indexing_config.node_conn_string.clone(),
         indexing_config.rpc_max_retries,
     ));
 
@@ -207,22 +250,26 @@ pub async fn start_indexing_services(
     })?;
 
     info!("Starting Indexer");
-    // Start by checking and updating the current status in the db.
-    initialize_index_metadata(db.clone(), rpc_client.clone()).await?;
-    let router_terminator = Arc::clone(&should_terminate);
 
-    // Setup the router which allows us to query health status and operations
-    let router_handle = tokio::spawn(async move {
-        if let Err(e) = router::initialize_router(router_terminator.clone()).await {
+    Ok((db, rpc_client))
+}
+
+fn spawn_router_service(should_terminate: Arc<AtomicBool>) -> tokio::task::JoinHandle<Result<()>> {
+    tokio::spawn(async move {
+        if let Err(e) = router::initialize_router(should_terminate.clone()).await {
             error!("[router] unexpected error {}", e);
         }
-
         info!("[router] shutting down");
-
         Ok(())
-    });
+    })
+}
 
-    // Start the quick indexer
+fn spawn_quick_indexer_service(
+    indexing_config: &IndexingConfig,
+    db: Arc<DbConnection>,
+    rpc_client: Arc<EthereumJsonRpcClient>,
+    should_terminate: Arc<AtomicBool>,
+) -> Result<tokio::task::JoinHandle<Result<()>>> {
     let quick_config = QuickIndexConfig::builder()
         .should_index_txs(indexing_config.should_index_txs)
         .index_batch_size(indexing_config.index_batch_size)
@@ -231,23 +278,23 @@ pub async fn start_indexing_services(
         .rpc_timeout(indexing_config.rpc_timeout)
         .build()?;
 
-    let quick_indexer = QuickIndexer::new(
-        quick_config,
-        db.clone(),
-        rpc_client.clone(),
-        should_terminate.clone(),
-    )
-    .await;
+    let quick_indexer = QuickIndexer::new(quick_config, db, rpc_client, should_terminate);
 
-    let quick_indexer_handle = tokio::spawn(async move {
+    Ok(tokio::spawn(async move {
         info!("Starting quick indexer");
         if let Err(e) = quick_indexer.index().await {
             error!("[quick_index] unexpected error {}", e);
         }
         Ok(())
-    });
+    }))
+}
 
-    // Start the batch indexer
+fn spawn_batch_indexer_service(
+    indexing_config: &IndexingConfig,
+    db: Arc<DbConnection>,
+    rpc_client: Arc<EthereumJsonRpcClient>,
+    should_terminate: Arc<AtomicBool>,
+) -> Result<tokio::task::JoinHandle<Result<()>>> {
     let batch_config = BatchIndexConfig::builder()
         .should_index_txs(indexing_config.should_index_txs)
         .index_batch_size(indexing_config.index_batch_size)
@@ -258,30 +305,15 @@ pub async fn start_indexing_services(
         .task_timeout(300)
         .build()?;
 
-    let batch_indexer = BatchIndexer::new(
-        batch_config,
-        db.clone(),
-        rpc_client.clone(),
-        should_terminate.clone(),
-    )
-    .await;
+    let batch_indexer = BatchIndexer::new(batch_config, db, rpc_client, should_terminate);
 
-    let batch_indexer_handle = tokio::spawn(async move {
+    Ok(tokio::spawn(async move {
         info!("Starting batch indexer");
         if let Err(e) = batch_indexer.index().await {
             error!("[batch_index] unexpected error {}", e);
         }
         Ok(())
-    });
-    // Wait for termination, which will join all the handles.
-    wait_for_thread_completion(vec![
-        router_handle,
-        quick_indexer_handle,
-        batch_indexer_handle,
-    ])
-    .await?;
-
-    Ok(())
+    }))
 }
 
 async fn initialize_index_metadata(

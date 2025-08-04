@@ -3,9 +3,12 @@
 //! This module contains property tests that verify the correctness of
 //! type validation and conversion functions across a wide range of inputs.
 
+#![allow(clippy::unwrap_used)]
+#![allow(clippy::expect_used)]
+#![allow(clippy::arithmetic_side_effects)]
+
 use crate::types::{Address, BlockHash, BlockNumber, TransactionHash};
 use proptest::prelude::*;
-use proptest::strategy::ValueTree;
 
 /// Generate valid hex characters (0-9, a-f, A-F)
 fn hex_char() -> impl Strategy<Value = char> {
@@ -303,9 +306,9 @@ mod edge_case_tests {
 
     #[test]
     fn test_empty_strings() {
-        assert!(BlockHash::new("".to_string()).is_err());
-        assert!(TransactionHash::new("".to_string()).is_err());
-        assert!(Address::new("".to_string()).is_err());
+        assert!(BlockHash::new(String::new()).is_err());
+        assert!(TransactionHash::new(String::new()).is_err());
+        assert!(Address::new(String::new()).is_err());
         assert!(BlockNumber::from_hex("").is_err());
     }
 

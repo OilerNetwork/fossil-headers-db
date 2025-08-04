@@ -80,7 +80,7 @@ pub async fn fill_gaps(
     end: Option<BlockNumber>,
     should_terminate: Arc<AtomicBool>,
 ) -> Result<()> {
-    let range_start_pointer = start.unwrap_or(BlockNumber::from_trusted(0));
+    let range_start_pointer = start.unwrap_or_else(|| BlockNumber::from_trusted(0));
     let range_end = get_range_end(end).await?;
 
     if range_end.value() < 0 || range_start_pointer == range_end {
@@ -121,7 +121,7 @@ async fn fill_missing_blocks_in_range(
                     "[fill_gaps] No missing values found from {} to {}",
                     range_start_pointer, range_end_pointer
                 );
-                range_start_pointer = BlockNumber::from_trusted(range_end_pointer.value() + 1)
+                range_start_pointer = BlockNumber::from_trusted(range_end_pointer.value() + 1);
             }
         }
     }
@@ -134,58 +134,80 @@ async fn fill_null_rows(
     should_terminate: &AtomicBool,
 ) -> Result<()> {
     let mut range_start_pointer: BlockNumber = search_start;
-    let mut range_end_pointer: BlockNumber;
 
     while !should_terminate.load(Ordering::Relaxed) && range_start_pointer <= search_end {
-        range_end_pointer = BlockNumber::from_trusted(
-            search_end
-                .value()
-                .min(range_start_pointer.value() + 100_000 - 1),
-        );
+        let range_end_pointer = calculate_range_end(search_end, range_start_pointer);
 
-        // Find null data in the database
         let null_data_vec = db::find_null_data(range_start_pointer, range_end_pointer).await?;
-        for null_data_block_number in null_data_vec {
-            info!(
-                "[fill_gaps] Found null values for block number: {}",
-                null_data_block_number
-            );
 
-            // Logic from process_missing_block
-            let mut block_retrieved = false;
-            for i in 0..MAX_RETRIES {
-                match rpc::get_full_block_by_number(null_data_block_number, Some(TIMEOUT)).await {
-                    Ok(block) => {
-                        db::write_blockheader(block).await?;
-                        info!(
-                            "[fill_gaps] Successfully wrote block {} after {i} retries",
-                            null_data_block_number.value()
-                        );
-                        range_start_pointer = null_data_block_number + 1;
-                        block_retrieved = true;
-                        break;
-                    }
-                    Err(e) => {
-                        warn!("[fill_gaps] Error retrieving block {null_data_block_number} (attempt {}/{}): {e}", i + 1, MAX_RETRIES);
-                        if i == MAX_RETRIES - 1 {
-                            // Last attempt failed - this is a critical error for gap filling
-                            return Err(BlockchainError::block_not_found(format!("Failed to retrieve block {} after {MAX_RETRIES} attempts during gap filling", null_data_block_number.value())));
-                        }
-                    }
-                }
-                let backoff: u64 = (i + 1).pow(2) * 5;
-                tokio::time::sleep(Duration::from_secs(backoff)).await;
-            }
-
-            if !block_retrieved {
-                return Err(BlockchainError::block_not_found(format!(
-                    "Failed to retrieve block {} after {MAX_RETRIES} attempts",
-                    null_data_block_number.value()
-                )));
-            }
-        }
+        range_start_pointer = process_null_blocks(null_data_vec, range_start_pointer).await?;
     }
     Ok(())
+}
+
+async fn process_null_blocks(
+    null_data_vec: Vec<BlockNumber>,
+    mut range_start_pointer: BlockNumber,
+) -> Result<BlockNumber> {
+    for null_data_block_number in null_data_vec {
+        info!(
+            "[fill_gaps] Found null values for block number: {}",
+            null_data_block_number
+        );
+
+        retry_block_retrieval(null_data_block_number).await?;
+        range_start_pointer = null_data_block_number + 1;
+    }
+    Ok(range_start_pointer)
+}
+
+async fn retry_block_retrieval(block_number: BlockNumber) -> Result<()> {
+    for i in 0..MAX_RETRIES {
+        match rpc::get_full_block_by_number(block_number, Some(TIMEOUT)).await {
+            Ok(block) => {
+                db::write_blockheader(block).await?;
+                info!(
+                    "[fill_gaps] Successfully wrote block {} after {i} retries",
+                    block_number.value()
+                );
+                return Ok(());
+            }
+            Err(e) => {
+                warn!(
+                    "[fill_gaps] Error retrieving block {block_number} (attempt {}/{}): {e}",
+                    i + 1,
+                    MAX_RETRIES
+                );
+
+                if i == MAX_RETRIES - 1 {
+                    return Err(BlockchainError::block_not_found(format!(
+                        "Failed to retrieve block {} after {MAX_RETRIES} attempts during gap filling",
+                        block_number.value()
+                    )));
+                }
+            }
+        }
+
+        apply_exponential_backoff(i).await;
+    }
+
+    Err(BlockchainError::block_not_found(format!(
+        "Failed to retrieve block {} after {MAX_RETRIES} attempts",
+        block_number.value()
+    )))
+}
+
+fn calculate_range_end(search_end: BlockNumber, range_start_pointer: BlockNumber) -> BlockNumber {
+    BlockNumber::from_trusted(
+        search_end
+            .value()
+            .min(range_start_pointer.value() + 100_000 - 1),
+    )
+}
+
+async fn apply_exponential_backoff(attempt: u64) {
+    let backoff: u64 = (attempt + 1).pow(2) * 5;
+    tokio::time::sleep(Duration::from_secs(backoff)).await;
 }
 
 async fn process_missing_block(
@@ -219,17 +241,20 @@ async fn process_missing_block(
     }
 
     // All retries failed - return the error instead of silently continuing
-    if let Some(_e) = last_error {
-        Err(BlockchainError::block_not_found(format!(
-            "Failed to retrieve block {} after {MAX_RETRIES} attempts",
-            block_number.value()
-        )))
-    } else {
-        Err(BlockchainError::block_not_found(format!(
-            "Failed to retrieve block {} after {MAX_RETRIES} attempts (no error captured)",
-            block_number.value()
-        )))
-    }
+    last_error.map_or_else(
+        || {
+            Err(BlockchainError::block_not_found(format!(
+                "Failed to retrieve block {} after {MAX_RETRIES} attempts (no error captured)",
+                block_number.value()
+            )))
+        },
+        |_e| {
+            Err(BlockchainError::block_not_found(format!(
+                "Failed to retrieve block {} after {MAX_RETRIES} attempts",
+                block_number.value()
+            )))
+        },
+    )
 }
 
 async fn get_range_end(end: Option<BlockNumber>) -> Result<BlockNumber> {
@@ -281,14 +306,13 @@ async fn chain_update_blocks(
                 range_start = last_block + 1;
                 last_block = new_latest_block;
                 break;
-            } else {
-                info!(
-                    "No new block finalized. Latest: {}. Sleeping for {}s...",
-                    new_latest_block.value(),
-                    POLL_INTERVAL
-                );
-                tokio::time::sleep(Duration::from_secs(POLL_INTERVAL)).await;
             }
+            info!(
+                "No new block finalized. Latest: {}. Sleeping for {}s...",
+                new_latest_block.value(),
+                POLL_INTERVAL
+            );
+            tokio::time::sleep(Duration::from_secs(POLL_INTERVAL)).await;
         }
     }
 
@@ -313,89 +337,24 @@ async fn update_blocks(
                 break;
             }
 
-            let range_end = (last_block.value() + 1).min(n + size as i64);
+            let range_end = (last_block.value() + 1).min(n + i64::from(size));
 
-            let tasks: Vec<_> = (n..range_end)
-                .map(|block_number| {
-                    let permit = semaphore.clone();
-                    task::spawn(async move {
-                        let _permit = permit.acquire().await.map_err(|_| {
-                            BlockchainError::internal("Semaphore closed".to_string())
-                        })?;
+            let (successful_count, failed_blocks) =
+                process_block_range(n, range_end, &semaphore).await?;
 
-                        // Add timeout to task execution
-                        tokio::time::timeout(
-                            Duration::from_secs(TASK_TIMEOUT),
-                            process_block(BlockNumber::from_trusted(block_number)),
-                        )
-                        .await
-                        .map_err(|_| {
-                            BlockchainError::internal(format!(
-                                "Task timeout processing block {block_number}"
-                            ))
-                        })?
-                    })
-                })
-                .collect();
+            let should_continue =
+                apply_backpressure_if_needed(&failed_blocks, successful_count, n).await?;
 
-            let all_res = join_all(tasks).await;
-
-            // Process results and handle failures gracefully
-            let mut failed_blocks = Vec::new();
-            let mut successful_count = 0;
-
-            for (idx, join_res) in all_res.iter().enumerate() {
-                let block_num = n + idx as i64;
-                match join_res {
-                    Ok(Ok(_)) => {
-                        successful_count += 1;
-                    }
-                    Ok(Err(e)) => {
-                        warn!("Block {} failed with error: {}", block_num, e);
-                        failed_blocks.push(block_num);
-                    }
-                    Err(e) => {
-                        warn!("Task for block {} panicked: {}", block_num, e);
-                        failed_blocks.push(block_num);
-                    }
-                }
-            }
-
-            // Implement backpressure: if too many failures, slow down
-            let failure_ratio = failed_blocks.len() as f64 / all_res.len() as f64;
-            if failure_ratio > 0.3 {
-                warn!(
-                    "High failure rate ({:.1}%), applying backpressure. Failed blocks: {:?}",
-                    failure_ratio * 100.0,
-                    failed_blocks
-                );
-                tokio::time::sleep(Duration::from_secs(5)).await;
-
-                // If failure rate is very high, break to avoid overwhelming the system
-                if failure_ratio > 0.7 {
-                    error!(
-                        "Failure rate too high ({:.1}%), stopping batch. Rerun from block: {}",
-                        failure_ratio * 100.0,
-                        n
-                    );
-                    break;
-                }
-            }
-
-            if !failed_blocks.is_empty() {
-                error!(
-                    "Some blocks failed. Failed: {:?}. Rerun from block: {}",
-                    failed_blocks, n
-                );
+            if !should_continue {
                 break;
             }
-            info!(
-                "Successfully written {} blocks ({} - {}). Next block: {}",
-                successful_count,
-                n,
-                range_end - 1,
-                range_end
-            );
+
+            let should_continue =
+                handle_batch_completion(&failed_blocks, successful_count, n, range_end);
+
+            if !should_continue {
+                break;
+            }
         }
     }
 
@@ -404,31 +363,53 @@ async fn update_blocks(
 
 async fn process_block(block_number: BlockNumber) -> Result<()> {
     for i in 0..MAX_RETRIES {
-        match rpc::get_full_block_by_number(block_number, Some(TIMEOUT)).await {
-            Ok(block) => match db::write_blockheader(block).await {
-                Ok(_) => {
-                    if i > 0 {
-                        info!(
-                            "[update_from] Successfully wrote block {} after {i} retries",
-                            block_number.value()
-                        );
-                    }
-                    return Ok(());
-                }
-                Err(e) => warn!("[update_from] Error writing block {block_number}: {e}"),
-            },
-            Err(e) => warn!(
-                "[update_from] Error retrieving block {}: {}",
-                block_number, e
-            ),
+        if let Some(result) = attempt_block_processing(block_number, i).await? {
+            return result;
         }
-        let backoff: u64 = (i).pow(2) * 5;
-        tokio::time::sleep(Duration::from_secs(backoff)).await;
+
+        apply_exponential_backoff(i).await;
     }
+
     error!("[update_from] Error with block number {}", block_number);
     Err(BlockchainError::internal(format!(
         "Failed to process block {block_number}"
     )))
+}
+
+async fn attempt_block_processing(
+    block_number: BlockNumber,
+    attempt: u64,
+) -> Result<Option<Result<()>>> {
+    let block = match rpc::get_full_block_by_number(block_number, Some(TIMEOUT)).await {
+        Ok(block) => block,
+        Err(e) => {
+            warn!(
+                "[update_from] Error retrieving block {}: {}",
+                block_number, e
+            );
+            return Ok(None);
+        }
+    };
+
+    match db::write_blockheader(block).await {
+        Ok(()) => {
+            log_success_if_retry(block_number, attempt);
+            Ok(Some(Ok(())))
+        }
+        Err(e) => {
+            warn!("[update_from] Error writing block {block_number}: {e}");
+            Ok(None)
+        }
+    }
+}
+
+fn log_success_if_retry(block_number: BlockNumber, attempt: u64) {
+    if attempt > 0 {
+        info!(
+            "[update_from] Successfully wrote block {} after {attempt} retries",
+            block_number.value()
+        );
+    }
 }
 
 async fn get_first_missing_block(start: Option<BlockNumber>) -> Result<BlockNumber> {
@@ -441,16 +422,125 @@ async fn get_first_missing_block(start: Option<BlockNumber>) -> Result<BlockNumb
 async fn get_last_block(end: Option<BlockNumber>) -> Result<BlockNumber> {
     let latest_block: BlockNumber = rpc::get_latest_finalized_blocknumber(Some(TIMEOUT)).await?;
 
-    Ok(match end {
-        Some(s) => {
-            if s <= latest_block {
-                s
-            } else {
-                latest_block
+    Ok(end.map_or(latest_block, |s| {
+        if s <= latest_block {
+            s
+        } else {
+            latest_block
+        }
+    }))
+}
+
+async fn process_block_range(
+    start_block: i64,
+    end_block: i64,
+    semaphore: &Arc<Semaphore>,
+) -> Result<(usize, Vec<i64>)> {
+    let tasks: Vec<_> = (start_block..end_block)
+        .map(|block_number| {
+            let permit = semaphore.clone();
+            task::spawn(async move {
+                let _permit = permit
+                    .acquire()
+                    .await
+                    .map_err(|_| BlockchainError::internal("Semaphore closed".to_string()))?;
+
+                tokio::time::timeout(
+                    Duration::from_secs(TASK_TIMEOUT),
+                    process_block(BlockNumber::from_trusted(block_number)),
+                )
+                .await
+                .map_err(|_| {
+                    BlockchainError::internal(format!(
+                        "Task timeout processing block {block_number}"
+                    ))
+                })?
+            })
+        })
+        .collect();
+
+    let all_res = join_all(tasks).await;
+
+    let mut failed_blocks = Vec::new();
+    let mut successful_count = 0;
+
+    for (idx, join_res) in all_res.iter().enumerate() {
+        let block_num = start_block + i64::try_from(idx).unwrap_or(0);
+        match join_res {
+            Ok(Ok(())) => {
+                successful_count += 1;
+            }
+            Ok(Err(e)) => {
+                warn!("Block {} failed with error: {}", block_num, e);
+                failed_blocks.push(block_num);
+            }
+            Err(e) => {
+                warn!("Task for block {} panicked: {}", block_num, e);
+                failed_blocks.push(block_num);
             }
         }
-        None => latest_block,
-    })
+    }
+
+    Ok((successful_count, failed_blocks))
+}
+
+async fn apply_backpressure_if_needed(
+    failed_blocks: &[i64],
+    successful_count: usize,
+    start_block: i64,
+) -> Result<bool> {
+    let total_blocks = failed_blocks.len() + successful_count;
+    if total_blocks == 0 {
+        return Ok(true);
+    }
+
+    #[allow(clippy::cast_precision_loss, clippy::float_arithmetic)]
+    let failure_ratio = failed_blocks.len() as f64 / total_blocks as f64;
+
+    if failure_ratio > 0.3 {
+        warn!(
+            "High failure rate ({:.1}%), applying backpressure. Failed blocks: {:?}",
+            failure_ratio * 100.0,
+            failed_blocks
+        );
+        tokio::time::sleep(Duration::from_secs(5)).await;
+
+        if failure_ratio > 0.7 {
+            error!(
+                "Failure rate too high ({:.1}%), stopping batch. Rerun from block: {}",
+                failure_ratio * 100.0,
+                start_block
+            );
+            return Ok(false);
+        }
+    }
+
+    Ok(true)
+}
+
+fn handle_batch_completion(
+    failed_blocks: &[i64],
+    successful_count: usize,
+    start_block: i64,
+    end_block: i64,
+) -> bool {
+    if !failed_blocks.is_empty() {
+        error!(
+            "Some blocks failed. Failed: {:?}. Rerun from block: {}",
+            failed_blocks, start_block
+        );
+        return false;
+    }
+
+    info!(
+        "Successfully written {} blocks ({} - {}). Next block: {}",
+        successful_count,
+        start_block,
+        end_block - 1,
+        end_block
+    );
+
+    true
 }
 
 #[cfg(test)]

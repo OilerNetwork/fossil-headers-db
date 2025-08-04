@@ -2,6 +2,11 @@
 //!
 //! This module provides common utilities and helper functions for testing across the codebase.
 
+#![allow(clippy::unwrap_used)]
+#![allow(clippy::expect_used)]
+#![allow(clippy::arithmetic_side_effects)]
+#![allow(dead_code)]
+
 #[cfg(test)]
 pub mod test_data {
     use crate::rpc::{BlockTransaction, Transaction};

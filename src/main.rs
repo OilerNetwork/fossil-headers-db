@@ -57,7 +57,7 @@ async fn main() -> Result<()> {
         match res {
             Ok(()) => info!("Router task completed"),
             Err(e) => warn!("Router task failed: {:?}", e),
-        };
+        }
     };
 
     let updater = async {
@@ -83,7 +83,7 @@ async fn main() -> Result<()> {
         match res {
             Ok(()) => info!("Updater task completed"),
             Err(e) => warn!("Updater task failed: {:?}", e),
-        };
+        }
     };
 
     let _ = join(router, updater).await;

@@ -9,40 +9,42 @@ use std::str::FromStr;
 pub struct BlockNumber(i64);
 
 impl BlockNumber {
-    /// Creates a new BlockNumber with validation
+    /// Creates a new `BlockNumber` with validation
     pub fn new(value: i64) -> Result<Self> {
         if value < 0 {
             return Err(BlockchainError::invalid_format(
                 "block_number",
-                format!("Block number cannot be negative: {value}"),
+                &format!("Block number cannot be negative: {value}"),
             ));
         }
         if value > i64::MAX - 1000 {
             return Err(BlockchainError::invalid_format(
                 "block_number",
-                format!("Block number too large: {value}"),
+                &format!("Block number too large: {value}"),
             ));
         }
-        Ok(BlockNumber(value))
+        Ok(Self(value))
     }
 
-    /// Creates a BlockNumber without validation (for trusted sources)
-    pub fn from_trusted(value: i64) -> Self {
-        BlockNumber(value)
+    /// Creates a `BlockNumber` without validation (for trusted sources)
+    #[must_use]
+    pub const fn from_trusted(value: i64) -> Self {
+        Self(value)
     }
 
     /// Gets the inner value
-    pub fn value(&self) -> i64 {
+    #[must_use]
+    pub const fn value(&self) -> i64 {
         self.0
     }
 
-    /// Creates a BlockNumber from a hex string
+    /// Creates a `BlockNumber` from a hex string
     pub fn from_hex(hex: &str) -> Result<Self> {
         let cleaned = hex.strip_prefix("0x").unwrap_or(hex);
         let value = i64::from_str_radix(cleaned, 16).map_err(|e| {
             BlockchainError::invalid_format(
                 "block_number",
-                format!("Invalid hex block number '{hex}': {e}"),
+                &format!("Invalid hex block number '{hex}': {e}"),
             )
         })?;
         Self::new(value)
@@ -68,7 +70,7 @@ impl FromStr for BlockNumber {
         let value = s.parse::<i64>().map_err(|e| {
             BlockchainError::invalid_format(
                 "block_number",
-                format!("Invalid block number '{s}': {e}"),
+                &format!("Invalid block number '{s}': {e}"),
             )
         })?;
         Self::new(value)
@@ -76,26 +78,26 @@ impl FromStr for BlockNumber {
 }
 
 impl Add<i64> for BlockNumber {
-    type Output = BlockNumber;
+    type Output = Self;
 
-    fn add(self, other: i64) -> BlockNumber {
-        BlockNumber::from_trusted(self.0 + other)
+    fn add(self, other: i64) -> Self {
+        Self::from_trusted(self.0 + other)
     }
 }
 
 impl Sub<i64> for BlockNumber {
-    type Output = BlockNumber;
+    type Output = Self;
 
-    fn sub(self, other: i64) -> BlockNumber {
-        BlockNumber::from_trusted(self.0 - other)
+    fn sub(self, other: i64) -> Self {
+        Self::from_trusted(self.0 - other)
     }
 }
 
-impl Sub<BlockNumber> for BlockNumber {
-    type Output = BlockNumber;
+impl Sub<Self> for BlockNumber {
+    type Output = Self;
 
-    fn sub(self, other: BlockNumber) -> BlockNumber {
-        BlockNumber::from_trusted(self.0 - other.0)
+    fn sub(self, other: Self) -> Self {
+        Self::from_trusted(self.0 - other.0)
     }
 }
 
@@ -104,23 +106,26 @@ impl Sub<BlockNumber> for BlockNumber {
 pub struct BlockHash(String);
 
 impl BlockHash {
-    /// Creates a new BlockHash with validation
+    /// Creates a new `BlockHash` with validation
     pub fn new(value: String) -> Result<Self> {
         Self::validate_hex_hash(&value, "block_hash")?;
-        Ok(BlockHash(value))
+        Ok(Self(value))
     }
 
-    /// Creates a BlockHash without validation (for trusted sources)
-    pub fn from_trusted(value: String) -> Self {
-        BlockHash(value)
+    /// Creates a `BlockHash` without validation (for trusted sources)
+    #[must_use]
+    pub const fn from_trusted(value: String) -> Self {
+        Self(value)
     }
 
     /// Gets the inner value
+    #[must_use]
     pub fn value(&self) -> &str {
         &self.0
     }
 
     /// Gets the inner value as owned String
+    #[must_use]
     pub fn into_value(self) -> String {
         self.0
     }
@@ -131,7 +136,7 @@ impl BlockHash {
         if cleaned.len() != 64 {
             return Err(BlockchainError::invalid_format(
                 field_name,
-                format!(
+                &format!(
                     "Hash must be 64 hex characters (got {}): {}",
                     cleaned.len(),
                     value
@@ -142,7 +147,7 @@ impl BlockHash {
         if !cleaned.chars().all(|c| c.is_ascii_hexdigit()) {
             return Err(BlockchainError::invalid_format(
                 field_name,
-                format!("Hash contains non-hex characters: {value}"),
+                &format!("Hash contains non-hex characters: {value}"),
             ));
         }
 
@@ -175,23 +180,26 @@ impl FromStr for BlockHash {
 pub struct TransactionHash(String);
 
 impl TransactionHash {
-    /// Creates a new TransactionHash with validation
+    /// Creates a new `TransactionHash` with validation
     pub fn new(value: String) -> Result<Self> {
         Self::validate_hex_hash(&value, "transaction_hash")?;
-        Ok(TransactionHash(value))
+        Ok(Self(value))
     }
 
-    /// Creates a TransactionHash without validation (for trusted sources)
-    pub fn from_trusted(value: String) -> Self {
-        TransactionHash(value)
+    /// Creates a `TransactionHash` without validation (for trusted sources)
+    #[must_use]
+    pub const fn from_trusted(value: String) -> Self {
+        Self(value)
     }
 
     /// Gets the inner value
+    #[must_use]
     pub fn value(&self) -> &str {
         &self.0
     }
 
     /// Gets the inner value as owned String
+    #[must_use]
     pub fn into_value(self) -> String {
         self.0
     }
@@ -202,7 +210,7 @@ impl TransactionHash {
         if cleaned.len() != 64 {
             return Err(BlockchainError::invalid_format(
                 field_name,
-                format!(
+                &format!(
                     "Hash must be 64 hex characters (got {}): {}",
                     cleaned.len(),
                     value
@@ -213,7 +221,7 @@ impl TransactionHash {
         if !cleaned.chars().all(|c| c.is_ascii_hexdigit()) {
             return Err(BlockchainError::invalid_format(
                 field_name,
-                format!("Hash contains non-hex characters: {value}"),
+                &format!("Hash contains non-hex characters: {value}"),
             ));
         }
 
@@ -249,20 +257,23 @@ impl Address {
     /// Creates a new Address with validation
     pub fn new(value: String) -> Result<Self> {
         Self::validate_address(&value)?;
-        Ok(Address(value))
+        Ok(Self(value))
     }
 
     /// Creates an Address without validation (for trusted sources)
-    pub fn from_trusted(value: String) -> Self {
-        Address(value)
+    #[must_use]
+    pub const fn from_trusted(value: String) -> Self {
+        Self(value)
     }
 
     /// Gets the inner value
+    #[must_use]
     pub fn value(&self) -> &str {
         &self.0
     }
 
     /// Gets the inner value as owned String
+    #[must_use]
     pub fn into_value(self) -> String {
         self.0
     }
@@ -273,7 +284,7 @@ impl Address {
         if cleaned.len() != 40 {
             return Err(BlockchainError::invalid_format(
                 "address",
-                format!(
+                &format!(
                     "Address must be 40 hex characters (got {}): {}",
                     cleaned.len(),
                     value
@@ -284,7 +295,7 @@ impl Address {
         if !cleaned.chars().all(|c| c.is_ascii_hexdigit()) {
             return Err(BlockchainError::invalid_format(
                 "address",
-                format!("Address contains non-hex characters: {value}"),
+                &format!("Address contains non-hex characters: {value}"),
             ));
         }
 

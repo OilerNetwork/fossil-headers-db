@@ -32,7 +32,8 @@ pub struct QuickIndexConfig {
 }
 
 impl QuickIndexConfig {
-    pub fn builder() -> QuickIndexConfigBuilder {
+    #[must_use]
+    pub const fn builder() -> QuickIndexConfigBuilder {
         QuickIndexConfigBuilder::new()
     }
 }
@@ -58,7 +59,8 @@ pub struct QuickIndexConfigBuilder {
 }
 
 impl QuickIndexConfigBuilder {
-    pub fn new() -> Self {
+    #[must_use]
+    pub const fn new() -> Self {
         Self {
             max_retries: 10,
             poll_interval: 10,
@@ -68,21 +70,24 @@ impl QuickIndexConfigBuilder {
         }
     }
 
-    pub fn fast_polling() -> Self {
+    #[must_use]
+    pub const fn fast_polling() -> Self {
         Self::new()
             .poll_interval(2)
             .index_batch_size(50)
             .rpc_timeout(120)
     }
 
-    pub fn slow_polling() -> Self {
+    #[must_use]
+    pub const fn slow_polling() -> Self {
         Self::new()
             .poll_interval(60)
             .index_batch_size(5)
             .max_retries(5)
     }
 
-    pub fn testing() -> Self {
+    #[must_use]
+    pub const fn testing() -> Self {
         Self::new()
             .poll_interval(1)
             .index_batch_size(1)
@@ -90,27 +95,32 @@ impl QuickIndexConfigBuilder {
             .max_retries(1)
     }
 
-    pub fn max_retries(mut self, max_retries: u8) -> Self {
+    #[must_use]
+    pub const fn max_retries(mut self, max_retries: u8) -> Self {
         self.max_retries = max_retries;
         self
     }
 
-    pub fn poll_interval(mut self, poll_interval: u32) -> Self {
+    #[must_use]
+    pub const fn poll_interval(mut self, poll_interval: u32) -> Self {
         self.poll_interval = poll_interval;
         self
     }
 
-    pub fn rpc_timeout(mut self, rpc_timeout: u32) -> Self {
+    #[must_use]
+    pub const fn rpc_timeout(mut self, rpc_timeout: u32) -> Self {
         self.rpc_timeout = rpc_timeout;
         self
     }
 
-    pub fn index_batch_size(mut self, index_batch_size: u32) -> Self {
+    #[must_use]
+    pub const fn index_batch_size(mut self, index_batch_size: u32) -> Self {
         self.index_batch_size = index_batch_size;
         self
     }
 
-    pub fn should_index_txs(mut self, should_index_txs: bool) -> Self {
+    #[must_use]
+    pub const fn should_index_txs(mut self, should_index_txs: bool) -> Self {
         self.should_index_txs = should_index_txs;
         self
     }
@@ -171,16 +181,16 @@ impl<T> QuickIndexer<T>
 where
     T: EthereumRpcProvider + Send + Sync + 'static,
 {
-    pub async fn new(
+    pub const fn new(
         config: QuickIndexConfig,
         db: Arc<DbConnection>,
         rpc_provider: Arc<T>,
         should_terminate: Arc<AtomicBool>,
-    ) -> QuickIndexer<T> {
+    ) -> Self {
         Self {
+            config,
             db,
             rpc_provider,
-            config,
             should_terminate,
         }
     }
@@ -192,52 +202,82 @@ where
         // 3. if yes, index the blocks
         // 4. if not, sleep for a period of time and do nothing
         while !self.should_terminate.load(Ordering::Relaxed) {
-            let last_block_number = match get_index_metadata(self.db.clone()).await {
-                Ok(metadata) => {
-                    if let Some(metadata) = metadata {
-                        metadata.current_latest_block_number
-                    } else {
-                        error!("[quick_index] Error getting index metadata");
-                        return Err(eyre!("Error getting index metadata: metadata not found."));
-                    }
-                }
-                Err(e) => {
-                    error!("[quick_index] Error getting index metadata: {}", e);
-                    return Err(e);
-                }
-            };
-
-            let new_latest_block = self
-                .rpc_provider
-                .get_latest_finalized_blocknumber(Some(self.config.rpc_timeout.into()))
-                .await?;
-
-            if new_latest_block > BlockNumber::from_trusted(last_block_number) {
-                let ending_block_number: i64 = if new_latest_block
-                    - BlockNumber::from_trusted(last_block_number)
-                    > BlockNumber::from_trusted(self.config.index_batch_size.into())
-                {
-                    last_block_number + i64::from(self.config.index_batch_size)
-                } else {
-                    new_latest_block.value()
-                };
-
-                self.index_block_range(
-                    last_block_number + 1, // index from recorded last block + 1
-                    ending_block_number,
-                    &self.should_terminate,
-                )
-                .await?;
-            } else {
-                info!(
-                    "No new block finalized. Latest: {}. Sleeping for {}s...",
-                    new_latest_block, self.config.poll_interval
-                );
-                tokio::time::sleep(Duration::from_secs(self.config.poll_interval.into())).await;
-            }
+            self.process_indexing_cycle().await?;
         }
 
         info!("[quick_index] Process terminating.");
+        Ok(())
+    }
+
+    async fn process_indexing_cycle(&self) -> Result<()> {
+        let last_block_number = self.get_last_indexed_block().await?;
+        let new_latest_block = self.get_latest_finalized_block().await?;
+
+        if Self::has_new_blocks(last_block_number, new_latest_block) {
+            self.index_new_blocks(last_block_number, new_latest_block)
+                .await
+        } else {
+            self.wait_for_new_blocks(new_latest_block).await
+        }
+    }
+
+    async fn get_last_indexed_block(&self) -> Result<i64> {
+        match get_index_metadata(self.db.clone()).await {
+            Ok(Some(metadata)) => Ok(metadata.current_latest_block_number),
+            Ok(None) => {
+                error!("[quick_index] Error getting index metadata");
+                Err(eyre!("Error getting index metadata: metadata not found."))
+            }
+            Err(e) => {
+                error!("[quick_index] Error getting index metadata: {}", e);
+                Err(e)
+            }
+        }
+    }
+
+    async fn get_latest_finalized_block(&self) -> Result<BlockNumber> {
+        self.rpc_provider
+            .get_latest_finalized_blocknumber(Some(self.config.rpc_timeout.into()))
+            .await
+            .map_err(|e| eyre::eyre!("Failed to get latest finalized block: {}", e))
+    }
+
+    fn has_new_blocks(last_block_number: i64, new_latest_block: BlockNumber) -> bool {
+        new_latest_block > BlockNumber::from_trusted(last_block_number)
+    }
+
+    async fn index_new_blocks(
+        &self,
+        last_block_number: i64,
+        new_latest_block: BlockNumber,
+    ) -> Result<()> {
+        let ending_block_number = self.calculate_ending_block(last_block_number, new_latest_block);
+
+        self.index_block_range(
+            last_block_number + 1, // index from recorded last block + 1
+            ending_block_number,
+            &self.should_terminate,
+        )
+        .await
+    }
+
+    fn calculate_ending_block(&self, last_block_number: i64, new_latest_block: BlockNumber) -> i64 {
+        let block_difference = new_latest_block - BlockNumber::from_trusted(last_block_number);
+        let batch_size = BlockNumber::from_trusted(self.config.index_batch_size.into());
+
+        if block_difference > batch_size {
+            last_block_number + i64::from(self.config.index_batch_size)
+        } else {
+            new_latest_block.value()
+        }
+    }
+
+    async fn wait_for_new_blocks(&self, new_latest_block: BlockNumber) -> Result<()> {
+        info!(
+            "No new block finalized. Latest: {}. Sleeping for {}s...",
+            new_latest_block, self.config.poll_interval
+        );
+        tokio::time::sleep(Duration::from_secs(self.config.poll_interval.into())).await;
         Ok(())
     }
 
@@ -248,85 +288,170 @@ where
         ending_block: i64,
         should_terminate: &AtomicBool,
     ) -> Result<()> {
-        let block_range: Vec<i64> = (starting_block..ending_block + 1).collect();
+        let block_range: Vec<i64> = (starting_block..=ending_block).collect();
+        self.retry_with_backoff(&block_range, starting_block, ending_block, should_terminate)
+            .await
+    }
 
-        for i in 0..self.config.max_retries {
-            if should_terminate.load(Ordering::Relaxed) {
-                info!("[quick_index] Termination requested. Stopping quick indexing.");
+    async fn retry_with_backoff(
+        &self,
+        block_range: &[i64],
+        starting_block: i64,
+        ending_block: i64,
+        should_terminate: &AtomicBool,
+    ) -> Result<()> {
+        for retry_attempt in 0..self.config.max_retries {
+            if Self::check_termination_signal(should_terminate) {
                 break;
             }
 
-            let timeout = self.config.rpc_timeout;
-
-            let rpc_block_headers_futures: Vec<_> = block_range
-                .clone()
-                .into_iter()
-                .map(|block_number| {
-                    let provider = self.rpc_provider.clone();
-                    let should_index_txs = self.config.should_index_txs;
-
-                    task::spawn(async move {
-                        provider
-                            .get_full_block_by_number(
-                                BlockNumber::from_trusted(block_number),
-                                should_index_txs,
-                                Some(timeout.into()),
-                            )
-                            .await
-                    })
-                })
-                .collect();
-
-            let rpc_block_headers_response = try_join_all(rpc_block_headers_futures).await?;
-
-            let mut block_headers = Vec::with_capacity(rpc_block_headers_response.len());
-            let mut has_err = false;
-
-            for header in rpc_block_headers_response.into_iter() {
-                match header {
-                    Ok(header) => {
-                        block_headers.push(header);
-                    }
-                    Err(e) => {
-                        has_err = true;
-                        warn!(
-                            "[quick_index] Error retrieving block in range from {} to {}. error: {}",
-                            starting_block, ending_block, e
-                        )
-                    }
-                }
-            }
-
-            if !has_err {
-                let mut db_tx = self.db.pool.begin().await?;
-
-                if self.config.should_index_txs {
-                    insert_block_header_query(&mut db_tx, block_headers).await?;
-                } else {
-                    insert_block_header_only_query(&mut db_tx, block_headers).await?;
-                }
-
-                update_latest_quick_index_block_number_query(&mut db_tx, ending_block).await?;
-
-                // Commit at the end
-                db_tx.commit().await?;
-
-                info!(
-                    "[quick_index] Indexing block range from {} to {} complete.",
-                    starting_block, ending_block
-                );
+            if matches!(
+                self.try_fetch_and_store(block_range, starting_block, ending_block)
+                    .await,
+                Ok(())
+            ) {
+                Self::log_indexing_success(starting_block, ending_block);
                 return Ok(());
             }
 
-            // If there's an error during rpc, retry.
-            error!("[quick_index] Error encountered during rpc, retry no. {}. Re-running from block: {}", i, starting_block);
-
-            // Exponential backoff
-            let backoff = (i as u64).pow(2) * 5;
-            tokio::time::sleep(Duration::from_secs(backoff)).await;
+            self.log_and_backoff(retry_attempt, starting_block).await;
         }
 
         Err(eyre!("Max retries reached. Stopping quick indexing."))
+    }
+
+    fn check_termination_signal(should_terminate: &AtomicBool) -> bool {
+        if should_terminate.load(Ordering::Relaxed) {
+            info!("[quick_index] Termination requested. Stopping quick indexing.");
+            true
+        } else {
+            false
+        }
+    }
+
+    async fn try_fetch_and_store(
+        &self,
+        block_range: &[i64],
+        starting_block: i64,
+        ending_block: i64,
+    ) -> Result<()> {
+        self.fetch_and_store_blocks(block_range, starting_block, ending_block)
+            .await
+    }
+
+    fn log_indexing_success(starting_block: i64, ending_block: i64) {
+        info!(
+            "[quick_index] Indexing block range from {} to {} complete.",
+            starting_block, ending_block
+        );
+    }
+
+    async fn log_and_backoff(&self, retry_attempt: u8, starting_block: i64) {
+        error!(
+            "[quick_index] Error encountered during rpc, retry no. {}. Re-running from block: {}.",
+            retry_attempt, starting_block
+        );
+        self.apply_exponential_backoff(retry_attempt).await;
+    }
+
+    async fn fetch_and_store_blocks(
+        &self,
+        block_range: &[i64],
+        starting_block: i64,
+        ending_block: i64,
+    ) -> Result<()> {
+        let block_headers = self
+            .fetch_block_headers(block_range, starting_block, ending_block)
+            .await?;
+        self.store_block_headers(block_headers, ending_block).await
+    }
+
+    async fn fetch_block_headers(
+        &self,
+        block_range: &[i64],
+        starting_block: i64,
+        ending_block: i64,
+    ) -> Result<Vec<crate::rpc::BlockHeader>> {
+        let rpc_futures = self.create_rpc_futures(block_range);
+        let rpc_responses = try_join_all(rpc_futures).await?;
+        Self::process_rpc_responses(rpc_responses, starting_block, ending_block)
+    }
+
+    fn create_rpc_futures(
+        &self,
+        block_range: &[i64],
+    ) -> Vec<task::JoinHandle<Result<crate::rpc::BlockHeader, crate::errors::BlockchainError>>>
+    {
+        let timeout = self.config.rpc_timeout;
+        let should_index_txs = self.config.should_index_txs;
+
+        block_range
+            .iter()
+            .map(|&block_number| {
+                let provider = self.rpc_provider.clone();
+                task::spawn(async move {
+                    provider
+                        .get_full_block_by_number(
+                            BlockNumber::from_trusted(block_number),
+                            should_index_txs,
+                            Some(timeout.into()),
+                        )
+                        .await
+                })
+            })
+            .collect()
+    }
+
+    fn process_rpc_responses(
+        rpc_responses: Vec<Result<crate::rpc::BlockHeader, crate::errors::BlockchainError>>,
+        starting_block: i64,
+        ending_block: i64,
+    ) -> Result<Vec<crate::rpc::BlockHeader>> {
+        let mut block_headers = Vec::with_capacity(rpc_responses.len());
+        let mut has_err = false;
+
+        for response in rpc_responses {
+            match response {
+                Ok(header) => block_headers.push(header),
+                Err(e) => {
+                    has_err = true;
+                    warn!(
+                        "[quick_index] Error retrieving block in range from {} to {}. error: {}",
+                        starting_block, ending_block, e
+                    );
+                }
+            }
+        }
+
+        if has_err {
+            return Err(eyre!("One or more RPC calls failed"));
+        }
+
+        Ok(block_headers)
+    }
+
+    async fn store_block_headers(
+        &self,
+        block_headers: Vec<crate::rpc::BlockHeader>,
+        ending_block: i64,
+    ) -> Result<()> {
+        let mut db_tx = self.db.pool.begin().await?;
+
+        if self.config.should_index_txs {
+            insert_block_header_query(&mut db_tx, block_headers).await?;
+        } else {
+            insert_block_header_only_query(&mut db_tx, block_headers).await?;
+        }
+
+        update_latest_quick_index_block_number_query(&mut db_tx, ending_block).await?;
+        db_tx.commit().await?;
+
+        Ok(())
+    }
+
+    async fn apply_exponential_backoff(&self, retry_count: u8) {
+        let backoff = (u64::from(retry_count)).pow(2) * 5;
+        tokio::time::sleep(Duration::from_secs(backoff)).await;
     }
 }
 
@@ -375,7 +500,7 @@ mod tests {
         let mock_rpc = Arc::new(MockRpcProvider::new());
         let should_terminate = Arc::new(AtomicBool::new(false));
 
-        let indexer = QuickIndexer::new(config, db, mock_rpc, should_terminate).await;
+        let indexer = QuickIndexer::new(config, db, mock_rpc, should_terminate);
 
         assert_eq!(indexer.config.max_retries, 10);
         assert_eq!(indexer.config.poll_interval, 10);
@@ -405,8 +530,7 @@ mod tests {
             .await
             .unwrap();
 
-        let indexer =
-            QuickIndexer::new(config, db.clone(), mock_rpc, should_terminate.clone()).await;
+        let indexer = QuickIndexer::new(config, db.clone(), mock_rpc, should_terminate.clone());
 
         task::spawn(async move {
             indexer.index().await.unwrap();
@@ -465,8 +589,7 @@ mod tests {
             .await
             .unwrap();
 
-        let indexer =
-            QuickIndexer::new(config, db.clone(), mock_rpc, should_terminate.clone()).await;
+        let indexer = QuickIndexer::new(config, db.clone(), mock_rpc, should_terminate.clone());
 
         task::spawn(async move {
             indexer.index().await.unwrap();
@@ -541,8 +664,7 @@ mod tests {
             .await
             .unwrap();
 
-        let indexer =
-            QuickIndexer::new(config, db.clone(), mock_rpc, should_terminate.clone()).await;
+        let indexer = QuickIndexer::new(config, db.clone(), mock_rpc, should_terminate.clone());
 
         // With the above configuration, the indexer should first not index anything since it started at 3.
         // Then as it increases, it should index 4 and 5.
@@ -627,8 +749,7 @@ mod tests {
         let should_terminate = Arc::new(AtomicBool::new(false));
 
         // The metadata table would not exist without initializing it.
-        let indexer =
-            QuickIndexer::new(config, db.clone(), mock_rpc, should_terminate.clone()).await;
+        let indexer = QuickIndexer::new(config, db.clone(), mock_rpc, should_terminate.clone());
 
         let result = indexer.index().await;
         assert!(result.is_err());
@@ -656,8 +777,7 @@ mod tests {
             .await
             .unwrap();
 
-        let indexer =
-            QuickIndexer::new(config, db.clone(), mock_rpc, should_terminate.clone()).await;
+        let indexer = QuickIndexer::new(config, db.clone(), mock_rpc, should_terminate.clone());
 
         let result = indexer.index().await;
         assert!(result.is_err());
@@ -694,8 +814,7 @@ mod tests {
             .await
             .unwrap();
 
-        let indexer =
-            QuickIndexer::new(config, db.clone(), mock_rpc, should_terminate.clone()).await;
+        let indexer = QuickIndexer::new(config, db.clone(), mock_rpc, should_terminate.clone());
 
         let result = indexer.index().await;
         assert!(result.is_err());

@@ -202,7 +202,7 @@ pub struct BlockHeaderWithFullTransaction {
 /// # Errors
 ///
 /// This function will return an error if:
-/// - The NODE_CONNECTION_STRING environment variable is not set
+/// - The `NODE_CONNECTION_STRING` environment variable is not set
 /// - The RPC request fails or times out
 /// - The response cannot be parsed as a valid block number
 /// - Network connectivity issues occur
@@ -263,7 +263,7 @@ pub async fn get_latest_finalized_blocknumber(timeout: Option<u64>) -> Result<Bl
 /// # Errors
 ///
 /// This function will return an error if:
-/// - The NODE_CONNECTION_STRING environment variable is not set
+/// - The `NODE_CONNECTION_STRING` environment variable is not set
 /// - The specified block number doesn't exist on the network
 /// - The RPC request fails or times out
 /// - The response cannot be parsed as valid block data
@@ -323,11 +323,8 @@ pub async fn batch_get_full_block_by_number(
     make_rpc_call::<_, Vec<BlockHeaderWithFullTransaction>>(&params, timeout).await
 }
 
-async fn make_rpc_call<T: Serialize, R: for<'de> Deserialize<'de>>(
-    params: &T,
-    timeout: Option<u64>,
-) -> Result<R> {
-    let connection_string = NODE_CONNECTION_STRING
+fn get_connection_string() -> Result<&'static str> {
+    NODE_CONNECTION_STRING
         .get_or_init(|| {
             dotenvy::var("NODE_CONNECTION_STRING")
                 .map_err(|e| error!("Failed to get NODE_CONNECTION_STRING: {}", e))
@@ -336,61 +333,65 @@ async fn make_rpc_call<T: Serialize, R: for<'de> Deserialize<'de>>(
         .as_ref()
         .ok_or_else(|| {
             BlockchainError::configuration("NODE_CONNECTION_STRING", "Environment variable not set")
-        })?;
-
-    let raw_response = match timeout {
-        Some(seconds) => {
-            CLIENT
-                .get_or_init(Client::new)
-                .post(connection_string)
-                .timeout(Duration::from_secs(seconds))
-                .json(params)
-                .send()
-                .await
-        }
-        None => {
-            CLIENT
-                .get_or_init(Client::new)
-                .post(connection_string)
-                .json(params)
-                .send()
-                .await
-        }
-    };
-
-    let raw_response = match raw_response {
-        Ok(response) => response,
-        Err(e) => {
-            error!("HTTP request error: {:?}", e);
-            return Err(e.into());
-        }
-    };
-
-    // Attempt to extract JSON from the response
-    let json_response = raw_response.text().await;
-    match json_response {
-        Ok(text) => {
-            // Try to deserialize the response, logging if it fails
-            match serde_json::from_str::<RpcResponse<R>>(&text) {
-                Ok(parsed) => Ok(parsed.result),
-                Err(e) => {
-                    error!(
-                        "Deserialization error: {:?}\nResponse snippet: {:?}",
-                        e,
-                        text // Log the entire response
-                    );
-                    Err(e.into())
-                }
-            }
-        }
-        Err(e) => {
-            error!("Failed to read response body: {:?}", e);
-            Err(e.into())
-        }
-    }
+        })
+        .map(std::string::String::as_str)
 }
 
-async fn make_retrying_rpc_call<T: Serialize, R: for<'de> Deserialize<'de> + Send>(
+async fn send_http_request<T: Serialize + Sync>(
+    params: &T,
+    connection_string: &str,
+    timeout: Option<u64>,
+) -> Result<reqwest::Response> {
+    let request_builder = CLIENT
+        .get_or_init(Client::new)
+        .post(connection_string)
+        .json(params);
+
+    let response = match timeout {
+        Some(seconds) => {
+            request_builder
+                .timeout(Duration::from_secs(seconds))
+                .send()
+                .await
+        }
+        None => request_builder.send().await,
+    };
+
+    response.map_err(|e| {
+        error!("HTTP request error: {:?}", e);
+        e.into()
+    })
+}
+
+async fn parse_rpc_response<R: for<'de> Deserialize<'de>>(
+    response: reqwest::Response,
+) -> Result<R> {
+    let text = response.text().await.map_err(|e| {
+        error!("Failed to read response body: {:?}", e);
+        e
+    })?;
+
+    serde_json::from_str::<RpcResponse<R>>(&text)
+        .map(|parsed| parsed.result)
+        .map_err(|e| {
+            error!(
+                "Deserialization error: {:?}\nResponse snippet: {:?}",
+                e, text
+            );
+            e.into()
+        })
+}
+
+async fn make_rpc_call<T: Serialize + Sync, R: for<'de> Deserialize<'de>>(
+    params: &T,
+    timeout: Option<u64>,
+) -> Result<R> {
+    let connection_string = get_connection_string()?;
+    let response = send_http_request(params, connection_string, timeout).await?;
+    parse_rpc_response(response).await
+}
+
+async fn make_retrying_rpc_call<T: Serialize + Sync, R: for<'de> Deserialize<'de> + Send>(
     params: &T,
     timeout: Option<u64>,
     max_retries: u32,
@@ -503,6 +504,7 @@ pub struct EthereumJsonRpcClient {
 
 impl EthereumJsonRpcClient {
     #[allow(dead_code)]
+    #[must_use]
     pub fn new(connection_string: String, max_retries: u32) -> Self {
         Self {
             client: reqwest::Client::new(),
@@ -513,14 +515,14 @@ impl EthereumJsonRpcClient {
 }
 
 impl EthereumJsonRpcClient {
-    async fn make_rpc_call<T: Serialize + Send + Sync, R: for<'de> Deserialize<'de> + Send>(
+    async fn send_http_request<T: Serialize + Send + Sync>(
         &self,
         params: T,
         timeout: Option<u64>,
-    ) -> Result<R> {
+    ) -> Result<reqwest::Response> {
         let connection_string = self.connection_string.clone();
 
-        let raw_response = match timeout {
+        let response = match timeout {
             Some(seconds) => {
                 self.client
                     .post(connection_string)
@@ -538,36 +540,39 @@ impl EthereumJsonRpcClient {
             }
         };
 
-        let raw_response = match raw_response {
-            Ok(response) => response,
-            Err(e) => {
-                error!("HTTP request error: {:?}", e);
-                return Err(e.into());
-            }
-        };
+        response.map_err(|e| {
+            error!("HTTP request error: {:?}", e);
+            e.into()
+        })
+    }
 
-        // Attempt to extract JSON from the response
-        let json_response = raw_response.text().await;
-        match json_response {
-            Ok(text) => {
-                // Try to deserialize the response, logging if it fails
-                match serde_json::from_str::<RpcResponse<R>>(&text) {
-                    Ok(parsed) => Ok(parsed.result),
-                    Err(e) => {
-                        error!(
-                            "Deserialization error: {:?}\nResponse snippet: {:?}",
-                            e,
-                            text // Log the entire response
-                        );
-                        Err(e.into())
-                    }
-                }
-            }
-            Err(e) => {
-                error!("Failed to read response body: {:?}", e);
-                Err(e.into())
-            }
-        }
+    async fn parse_response<R: for<'de> Deserialize<'de> + Send>(
+        &self,
+        response: reqwest::Response,
+    ) -> Result<R> {
+        let text = response.text().await.map_err(|e| {
+            error!("Failed to read response body: {:?}", e);
+            e
+        })?;
+
+        serde_json::from_str::<RpcResponse<R>>(&text)
+            .map(|parsed| parsed.result)
+            .map_err(|e| {
+                error!(
+                    "Deserialization error: {:?}\nResponse snippet: {:?}",
+                    e, text
+                );
+                e.into()
+            })
+    }
+
+    async fn make_rpc_call<T: Serialize + Send + Sync, R: for<'de> Deserialize<'de> + Send>(
+        &self,
+        params: T,
+        timeout: Option<u64>,
+    ) -> Result<R> {
+        let response = self.send_http_request(params, timeout).await?;
+        self.parse_response(response).await
     }
 
     async fn make_retrying_rpc_call<
@@ -642,7 +647,7 @@ impl EthereumRpcProvider for EthereumJsonRpcClient {
 pub fn try_convert_full_tx_vector(block_tx_vec: Vec<BlockTransaction>) -> Result<Vec<Transaction>> {
     let mut result_vec = vec![];
 
-    for block_tx in block_tx_vec.into_iter() {
+    for block_tx in block_tx_vec {
         let tx = block_tx.try_into()?;
         result_vec.push(tx);
     }

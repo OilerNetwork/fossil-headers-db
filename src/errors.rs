@@ -69,6 +69,7 @@ pub enum BlockchainError {
 
 impl BlockchainError {
     /// Create an invalid hex format error
+    #[must_use]
     pub fn invalid_hex(value: &str) -> Self {
         Self::InvalidHexFormat {
             message: format!("Cannot parse hex value: '{value}'"),
@@ -76,7 +77,8 @@ impl BlockchainError {
     }
 
     /// Create an invalid format error
-    pub fn invalid_format(field_name: &str, message: String) -> Self {
+    #[must_use]
+    pub fn invalid_format(field_name: &str, message: &str) -> Self {
         Self::InvalidHexFormat {
             message: format!("Invalid {field_name}: {message}"),
         }
@@ -90,7 +92,8 @@ impl BlockchainError {
     }
 
     /// Create an RPC timeout error
-    pub fn rpc_timeout(timeout_seconds: u64) -> Self {
+    #[must_use]
+    pub const fn rpc_timeout(timeout_seconds: u64) -> Self {
         Self::RpcTimeout { timeout_seconds }
     }
 
@@ -164,12 +167,14 @@ impl BlockchainError {
     }
 
     /// Create an invalid block range error
-    pub fn invalid_range(start: i64, end: i64) -> Self {
+    #[must_use]
+    pub const fn invalid_range(start: i64, end: i64) -> Self {
         Self::InvalidBlockRange { start, end }
     }
 
     /// Create a concurrency limit error
-    pub fn concurrency_limit(current: usize, max: usize) -> Self {
+    #[must_use]
+    pub const fn concurrency_limit(current: usize, max: usize) -> Self {
         Self::ConcurrencyLimitExceeded { current, max }
     }
 
