@@ -571,7 +571,10 @@ impl DbConnection {
 }
 
 #[cfg(test)]
-mod tests {
+mod tests;
+
+#[cfg(test)]
+mod integration_tests {
     use std::env;
 
     use super::*;

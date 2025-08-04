@@ -65,10 +65,16 @@
 
 pub mod commands;
 pub mod db;
+#[cfg(test)]
+pub mod error_tests;
 pub mod errors;
 pub mod indexer;
+#[cfg(test)]
+pub mod mocks;
 pub mod repositories;
 pub mod router;
 pub mod rpc;
+#[cfg(test)]
+pub mod test_utils;
 pub mod types;
 pub mod utils;

@@ -102,12 +102,12 @@ This document outlines a priority-structured plan to apply Rust best practices f
 **Issue**: Limited unit test coverage, difficult to test in isolation
 
 **Tasks**:
-- [ ] Add `mockall` dependency for mocking
-- [ ] Create mock traits for external dependencies (RPC, Database)
-- [ ] Add unit tests for core business logic functions
-- [ ] Add error path testing for all error scenarios
-- [ ] Separate unit tests from integration tests
-- [ ] Add test utilities for common mock setups
+- [x] Add `mockall` dependency for mocking
+- [x] Create mock traits for external dependencies (RPC, Database)
+- [x] Add unit tests for core business logic functions
+- [x] Add error path testing for all error scenarios
+- [x] Separate unit tests from integration tests
+- [x] Add test utilities for common mock setups
 
 **Success Criteria**: >80% unit test coverage, isolated testing of business logic
 

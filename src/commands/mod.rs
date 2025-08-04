@@ -65,15 +65,15 @@ use tracing::{error, info, warn};
 use crate::db;
 use crate::rpc;
 
-const MAX_RETRIES: u64 = 10;
+pub const MAX_RETRIES: u64 = 10;
 
 // Seconds
-const POLL_INTERVAL: u64 = 60;
-const TIMEOUT: u64 = 300;
+pub const POLL_INTERVAL: u64 = 60;
+pub const TIMEOUT: u64 = 300;
 
 // Concurrency limits
-const MAX_CONCURRENT_TASKS: usize = 10;
-const TASK_TIMEOUT: u64 = 300;
+pub const MAX_CONCURRENT_TASKS: usize = 10;
+pub const TASK_TIMEOUT: u64 = 300;
 
 pub async fn fill_gaps(
     start: Option<BlockNumber>,
@@ -452,3 +452,6 @@ async fn get_last_block(end: Option<BlockNumber>) -> Result<BlockNumber> {
         None => latest_block,
     })
 }
+
+#[cfg(test)]
+mod tests;
