@@ -147,11 +147,11 @@ This document outlines a priority-structured plan to apply Rust best practices f
 **Issue**: Complex hex parsing lacks thorough testing
 
 **Tasks**:
-- [ ] Add `proptest` dependency (already present)
-- [ ] Create property tests for hex conversion functions
-- [ ] Add property tests for block number validation
-- [ ] Add property tests for hash format validation
-- [ ] Create test generators for blockchain data
+- [x] Add `proptest` dependency (already present)
+- [x] Create property tests for hex conversion functions
+- [x] Add property tests for block number validation
+- [x] Add property tests for hash format validation
+- [x] Create test generators for blockchain data
 
 **Success Criteria**: Edge cases covered, increased confidence in parsing logic
 

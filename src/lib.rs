@@ -115,6 +115,8 @@ mod error_tests;
 #[cfg(test)]
 mod mocks;
 #[cfg(test)]
+mod property_tests;
+#[cfg(test)]
 mod test_utils;
 
 // Public re-exports for simplified API
