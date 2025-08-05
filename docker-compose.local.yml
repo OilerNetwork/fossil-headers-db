@@ -10,7 +10,7 @@ services:
     depends_on:
       db:
         condition: service_healthy
-  
+
   indexer:
     build:
       dockerfile: Dockerfile.indexer
@@ -25,7 +25,7 @@ services:
       - ROUTER_ENDPOINT=0.0.0.0:3000
       - INDEX_TRANSACTIONS=false
       - RUST_LOG=debug
-      - START_BLOCK_OFFSET=100
+      - START_BLOCK_OFFSET=1024
     depends_on:
       db:
         condition: service_healthy

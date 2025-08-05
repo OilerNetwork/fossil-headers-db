@@ -141,6 +141,8 @@ pub struct BlockHeaderWithEmptyTransaction {
     pub excess_blob_gas: Option<String>,
     #[serde(rename(deserialize = "parentBeaconBlockRoot"))]
     pub parent_beacon_block_root: Option<String>,
+    #[serde(rename(deserialize = "requestsHash"))]
+    pub requests_hash: Option<String>,
 }
 
 #[derive(Debug, Deserialize, Clone)]
@@ -186,6 +188,8 @@ pub struct BlockHeaderWithFullTransaction {
     pub excess_blob_gas: Option<String>,
     #[serde(rename(deserialize = "parentBeaconBlockRoot"))]
     pub parent_beacon_block_root: Option<String>,
+    #[serde(rename(deserialize = "requestsHash"))]
+    pub requests_hash: Option<String>,
 }
 
 /// Fetches the latest finalized block number from the Ethereum network.
@@ -482,6 +486,8 @@ pub struct BlockHeader {
     pub excess_blob_gas: Option<String>,
     #[serde(rename = "parentBeaconBlockRoot")]
     pub parent_beacon_block_root: Option<String>,
+    #[serde(rename = "requestsHash")]
+    pub requests_hash: Option<String>,
 }
 
 #[allow(dead_code)]

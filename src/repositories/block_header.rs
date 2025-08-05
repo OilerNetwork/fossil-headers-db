@@ -56,6 +56,7 @@ pub struct BlockHeaderDto {
     pub blob_gas_used: Option<String>,
     pub excess_blob_gas: Option<String>,
     pub parent_beacon_block_root: Option<String>,
+    pub requests_hash: Option<String>,
 }
 
 #[allow(dead_code)]
@@ -106,6 +107,7 @@ fn convert_rpc_blockheader_to_dto(block_header: BlockHeader) -> Result<BlockHead
         blob_gas_used: block_header.blob_gas_used.clone(),
         excess_blob_gas: block_header.excess_blob_gas.clone(),
         parent_beacon_block_root: block_header.parent_beacon_block_root,
+        requests_hash: block_header.requests_hash,
         receipts_root,
         state_root,
         transaction_root,
@@ -165,7 +167,8 @@ pub async fn insert_block_header_query(
                 nonce, transaction_root, receipts_root, state_root,
                 parent_hash, miner, logs_bloom, difficulty, totalDifficulty,
                 sha3_uncles, timestamp, extra_data, mix_hash, withdrawals_root,
-                blob_gas_used, excess_blob_gas, parent_beacon_block_root
+                blob_gas_used, excess_blob_gas, parent_beacon_block_root,
+                requests_hash
             )",
     );
 
@@ -194,7 +197,8 @@ pub async fn insert_block_header_query(
                 .push_bind(&block_header.withdrawals_root)
                 .push_bind(&block_header.blob_gas_used)
                 .push_bind(&block_header.excess_blob_gas)
-                .push_bind(&block_header.parent_beacon_block_root);
+                .push_bind(&block_header.parent_beacon_block_root)
+                .push_bind(&block_header.requests_hash);
         },
     );
 
@@ -222,7 +226,8 @@ pub async fn insert_block_header_query(
                 withdrawals_root = EXCLUDED.withdrawals_root,
                 blob_gas_used = EXCLUDED.blob_gas_used,
                 excess_blob_gas = EXCLUDED.excess_blob_gas,
-                parent_beacon_block_root = EXCLUDED.parent_beacon_block_root;",
+                parent_beacon_block_root = EXCLUDED.parent_beacon_block_root,
+                requests_hash = EXCLUDED.requests_hash;",
     );
 
     query_builder.build().execute(&mut **db_tx).await?;
@@ -308,7 +313,8 @@ pub async fn insert_block_header_only_query(
                 nonce, transaction_root, receipts_root, state_root,
                 parent_hash, miner, logs_bloom, difficulty, totalDifficulty,
                 sha3_uncles, timestamp, extra_data, mix_hash, withdrawals_root,
-                blob_gas_used, excess_blob_gas, parent_beacon_block_root
+                blob_gas_used, excess_blob_gas, parent_beacon_block_root,
+                requests_hash
             )",
     );
 
@@ -337,7 +343,8 @@ pub async fn insert_block_header_only_query(
                 .push_bind(&block_header.withdrawals_root)
                 .push_bind(&block_header.blob_gas_used)
                 .push_bind(&block_header.excess_blob_gas)
-                .push_bind(&block_header.parent_beacon_block_root);
+                .push_bind(&block_header.parent_beacon_block_root)
+                .push_bind(&block_header.requests_hash);
         },
     );
 
@@ -365,7 +372,8 @@ pub async fn insert_block_header_only_query(
                 withdrawals_root = EXCLUDED.withdrawals_root,
                 blob_gas_used = EXCLUDED.blob_gas_used,
                 excess_blob_gas = EXCLUDED.excess_blob_gas,
-                parent_beacon_block_root = EXCLUDED.parent_beacon_block_root;",
+                parent_beacon_block_root = EXCLUDED.parent_beacon_block_root,
+                requests_hash = EXCLUDED.requests_hash;",
     );
 
     query_builder.build().execute(&mut **db_tx).await?;
