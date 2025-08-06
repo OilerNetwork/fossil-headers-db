@@ -45,13 +45,15 @@ fn hex_string(len: usize) -> impl Strategy<Value = String> {
 
 /// Generate a hex string with optional 0x prefix
 fn hex_string_with_prefix(len: usize) -> impl Strategy<Value = String> {
-    (hex_string(len), prop::bool::ANY).prop_map(|(hex, with_prefix)| {
-        if with_prefix {
-            format!("0x{}", hex)
-        } else {
-            hex
-        }
-    })
+    (hex_string(len), prop::bool::ANY).prop_map(
+        |(hex, with_prefix)| {
+            if with_prefix {
+                format!("0x{hex}")
+            } else {
+                hex
+            }
+        },
+    )
 }
 
 /// Generate valid block numbers (non-negative, within reasonable bounds)
@@ -104,17 +106,17 @@ proptest! {
     /// Test that block number hex parsing works for valid hex strings
     #[test]
     fn prop_block_number_hex_parsing(
-        value in 0u64..=0xFFFFFFFFFFFFFF,
+        value in 0u64..=0x00FF_FFFF_FFFF_FFFF,
         with_prefix in prop::bool::ANY
     ) {
         let hex_str = if with_prefix {
-            format!("0x{:x}", value)
+            format!("0x{value:x}")
         } else {
-            format!("{:x}", value)
+            format!("{value:x}")
         };
 
         let block_num = BlockNumber::from_hex(&hex_str).unwrap();
-        prop_assert_eq!(block_num.value(), value as i64);
+        prop_assert_eq!(block_num.value(), i64::try_from(value).expect("Value conversion failed"));
     }
 
     /// Test that invalid hex strings fail block number parsing
@@ -210,8 +212,8 @@ proptest! {
     /// Test that block number arithmetic operations maintain validity
     #[test]
     fn prop_block_number_arithmetic(
-        a in 0i64..=1000000,
-        b in 0i64..=1000000
+        a in 0i64..=1_000_000,
+        b in 0i64..=1_000_000
     ) {
         let block_a = BlockNumber::new(a).unwrap();
         let block_b = BlockNumber::new(b).unwrap();
@@ -282,7 +284,7 @@ proptest! {
     /// Test that block ranges are always valid and properly ordered
     #[test]
     fn prop_block_range_validity(
-        start in 0i64..=1000000,
+        start in 0i64..=1_000_000,
         range in 1i64..=1000
     ) {
         let start_block = BlockNumber::from_trusted(start);

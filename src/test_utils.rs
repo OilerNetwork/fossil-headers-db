@@ -40,7 +40,11 @@ pub mod test_data {
     /// Creates a sequence of test block numbers
     pub fn create_test_block_range(start: i64, count: usize) -> Vec<BlockNumber> {
         (0..count)
-            .map(|i| BlockNumber::from_trusted(start + i as i64))
+            .map(|i| {
+                BlockNumber::from_trusted(
+                    start + i64::try_from(i).expect("Index conversion failed"),
+                )
+            })
             .collect()
     }
 
@@ -52,7 +56,7 @@ pub mod test_data {
             ("0xa", Ok(10)),
             ("0xff", Ok(255)),
             ("0x1000", Ok(4096)),
-            ("0x1312d00", Ok(20000000)),
+            ("0x1312d00", Ok(20_000_000)),
             ("0x7FFFFFFFFFFFFFFF", Ok(i64::MAX)),
             ("", Err(())),                   // Empty string
             ("0x", Err(())),                 // Just prefix

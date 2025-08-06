@@ -16,7 +16,7 @@ mod unit_tests {
             let hex_str = "0x1a2b3c";
             let result = convert_hex_string_to_i64(hex_str);
             assert!(result.is_ok());
-            assert_eq!(result.unwrap(), 1715004);
+            assert_eq!(result.unwrap(), 1_715_004);
         }
 
         #[test]
@@ -24,7 +24,7 @@ mod unit_tests {
             let hex_str = "1a2b3c";
             let result = convert_hex_string_to_i64(hex_str);
             assert!(result.is_ok());
-            assert_eq!(result.unwrap(), 1715004);
+            assert_eq!(result.unwrap(), 1_715_004);
         }
 
         #[test]
@@ -76,12 +76,14 @@ mod unit_tests {
         use super::*;
 
         #[test]
+        #[allow(clippy::assertions_on_constants)] // These tests validate constant ranges at compile time
         fn test_db_max_connections_constant() {
             assert!(DB_MAX_CONNECTIONS > 0);
             assert!(DB_MAX_CONNECTIONS <= 1000);
         }
 
         #[test]
+        #[allow(clippy::assertions_on_constants)] // These tests validate constant ranges at compile time
         fn test_db_constants_reasonable() {
             assert!(DB_MAX_CONNECTIONS >= 10);
         }

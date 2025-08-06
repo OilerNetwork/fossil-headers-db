@@ -56,6 +56,7 @@ pub struct BlockHeaderDto {
     pub blob_gas_used: Option<String>,
     pub excess_blob_gas: Option<String>,
     pub parent_beacon_block_root: Option<String>,
+    pub requests_hash: Option<String>,
 }
 
 #[allow(dead_code)]
@@ -106,6 +107,7 @@ fn convert_rpc_blockheader_to_dto(block_header: BlockHeader) -> Result<BlockHead
         blob_gas_used: block_header.blob_gas_used.clone(),
         excess_blob_gas: block_header.excess_blob_gas.clone(),
         parent_beacon_block_root: block_header.parent_beacon_block_root,
+        requests_hash: block_header.requests_hash,
         receipts_root,
         state_root,
         transaction_root,
@@ -165,7 +167,8 @@ pub async fn insert_block_header_query(
                 nonce, transaction_root, receipts_root, state_root,
                 parent_hash, miner, logs_bloom, difficulty, totalDifficulty,
                 sha3_uncles, timestamp, extra_data, mix_hash, withdrawals_root,
-                blob_gas_used, excess_blob_gas, parent_beacon_block_root
+                blob_gas_used, excess_blob_gas, parent_beacon_block_root,
+                requests_hash
             )",
     );
 
@@ -194,7 +197,8 @@ pub async fn insert_block_header_query(
                 .push_bind(&block_header.withdrawals_root)
                 .push_bind(&block_header.blob_gas_used)
                 .push_bind(&block_header.excess_blob_gas)
-                .push_bind(&block_header.parent_beacon_block_root);
+                .push_bind(&block_header.parent_beacon_block_root)
+                .push_bind(&block_header.requests_hash);
         },
     );
 
@@ -222,7 +226,8 @@ pub async fn insert_block_header_query(
                 withdrawals_root = EXCLUDED.withdrawals_root,
                 blob_gas_used = EXCLUDED.blob_gas_used,
                 excess_blob_gas = EXCLUDED.excess_blob_gas,
-                parent_beacon_block_root = EXCLUDED.parent_beacon_block_root;",
+                parent_beacon_block_root = EXCLUDED.parent_beacon_block_root,
+                requests_hash = EXCLUDED.requests_hash;",
     );
 
     query_builder.build().execute(&mut **db_tx).await?;
@@ -308,7 +313,8 @@ pub async fn insert_block_header_only_query(
                 nonce, transaction_root, receipts_root, state_root,
                 parent_hash, miner, logs_bloom, difficulty, totalDifficulty,
                 sha3_uncles, timestamp, extra_data, mix_hash, withdrawals_root,
-                blob_gas_used, excess_blob_gas, parent_beacon_block_root
+                blob_gas_used, excess_blob_gas, parent_beacon_block_root,
+                requests_hash
             )",
     );
 
@@ -337,7 +343,8 @@ pub async fn insert_block_header_only_query(
                 .push_bind(&block_header.withdrawals_root)
                 .push_bind(&block_header.blob_gas_used)
                 .push_bind(&block_header.excess_blob_gas)
-                .push_bind(&block_header.parent_beacon_block_root);
+                .push_bind(&block_header.parent_beacon_block_root)
+                .push_bind(&block_header.requests_hash);
         },
     );
 
@@ -365,7 +372,8 @@ pub async fn insert_block_header_only_query(
                 withdrawals_root = EXCLUDED.withdrawals_root,
                 blob_gas_used = EXCLUDED.blob_gas_used,
                 excess_blob_gas = EXCLUDED.excess_blob_gas,
-                parent_beacon_block_root = EXCLUDED.parent_beacon_block_root;",
+                parent_beacon_block_root = EXCLUDED.parent_beacon_block_root,
+                requests_hash = EXCLUDED.requests_hash;",
     );
 
     query_builder.build().execute(&mut **db_tx).await?;
@@ -385,11 +393,11 @@ mod tests {
 
     fn get_test_db_connection() -> String {
         env::var("DATABASE_URL").unwrap_or_else(|_| {
-            "postgresql://postgres:postgres@localhost:5433/fossil_test".to_string()
+            "postgresql://postgres:postgres@localhost:5432/postgres".to_string()
         })
     }
 
-    fn assert_block_header_eq(header1: BlockHeaderDto, header2: BlockHeaderDto) {
+    fn assert_block_header_eq(header1: &BlockHeaderDto, header2: &BlockHeaderDto) {
         assert_eq!(header1.number, header2.number);
         assert_eq!(header1.block_hash, header2.block_hash);
         assert_eq!(header1.nonce, header2.nonce);
@@ -417,7 +425,7 @@ mod tests {
         );
     }
 
-    fn assert_transactions_eq(transaction1: TransactionDto, transaction2: TransactionDto) {
+    fn assert_transactions_eq(transaction1: &TransactionDto, transaction2: &TransactionDto) {
         assert_eq!(transaction1.block_number, transaction2.block_number);
         assert_eq!(transaction1.transaction_hash, transaction2.transaction_hash);
         assert_eq!(
@@ -483,7 +491,7 @@ mod tests {
             convert_rpc_blockheader_to_dto(block_headers[0].clone()).unwrap();
         let block_header_in_db = result.unwrap();
 
-        assert_block_header_eq(block_header_in_db, block_header_to_compare);
+        assert_block_header_eq(&block_header_in_db, &block_header_to_compare);
 
         tx.rollback().await.unwrap();
     }
@@ -512,7 +520,7 @@ mod tests {
         let block_header_to_compare =
             convert_rpc_blockheader_to_dto(block_headers[0].clone()).unwrap();
         let block_header_in_db = result.unwrap();
-        assert_block_header_eq(block_header_in_db, block_header_to_compare);
+        assert_block_header_eq(&block_header_in_db, &block_header_to_compare);
 
         // Check if the second block is inserted
         let result: std::result::Result<BlockHeaderDto, sqlx::Error> =
@@ -525,7 +533,7 @@ mod tests {
         let block_header_to_compare =
             convert_rpc_blockheader_to_dto(block_headers[1].clone()).unwrap();
         let block_header_in_db = result.unwrap();
-        assert_block_header_eq(block_header_in_db, block_header_to_compare);
+        assert_block_header_eq(&block_header_in_db, &block_header_to_compare);
 
         tx.rollback().await.unwrap();
     }
@@ -585,7 +593,7 @@ mod tests {
         let block_header_to_compare =
             convert_rpc_blockheader_to_dto(same_block_header_with_diff_values.clone()).unwrap();
         let block_header_in_db = result.unwrap();
-        assert_block_header_eq(block_header_in_db, block_header_to_compare);
+        assert_block_header_eq(&block_header_in_db, &block_header_to_compare);
 
         tx.rollback().await.unwrap();
     }
@@ -615,7 +623,7 @@ mod tests {
 
         let transaction_to_compare = convert_rpc_transaction_to_dto(transaction.clone()).unwrap();
         let transaction_in_db = result.unwrap();
-        assert_transactions_eq(transaction_in_db, transaction_to_compare);
+        assert_transactions_eq(&transaction_in_db, &transaction_to_compare);
 
         tx.rollback().await.unwrap();
     }
@@ -649,7 +657,7 @@ mod tests {
 
         let transaction_to_compare = convert_rpc_transaction_to_dto(transaction_1.clone()).unwrap();
         let transaction_in_db = result.unwrap();
-        assert_transactions_eq(transaction_in_db, transaction_to_compare);
+        assert_transactions_eq(&transaction_in_db, &transaction_to_compare);
 
         let result: std::result::Result<TransactionDto, sqlx::Error> =
             sqlx::query_as("SELECT * FROM transactions WHERE transaction_hash = $1")
@@ -660,7 +668,7 @@ mod tests {
 
         let transaction_to_compare = convert_rpc_transaction_to_dto(transaction_2.clone()).unwrap();
         let transaction_in_db = result.unwrap();
-        assert_transactions_eq(transaction_in_db, transaction_to_compare);
+        assert_transactions_eq(&transaction_in_db, &transaction_to_compare);
 
         tx.rollback().await.unwrap();
     }
@@ -722,7 +730,7 @@ mod tests {
         let transaction_to_compare =
             convert_rpc_transaction_to_dto(same_transaction_with_diff_values.clone()).unwrap();
         let transaction_in_db = result.unwrap();
-        assert_transactions_eq(transaction_in_db, transaction_to_compare);
+        assert_transactions_eq(&transaction_in_db, &transaction_to_compare);
 
         tx.rollback().await.unwrap();
     }
@@ -752,7 +760,7 @@ mod tests {
             convert_rpc_blockheader_to_dto(block_headers[0].clone()).unwrap();
         let block_header_in_db = result.unwrap();
 
-        assert_block_header_eq(block_header_in_db, block_header_to_compare);
+        assert_block_header_eq(&block_header_in_db, &block_header_to_compare);
 
         tx.rollback().await.unwrap();
     }
@@ -781,7 +789,7 @@ mod tests {
         let block_header_to_compare =
             convert_rpc_blockheader_to_dto(block_headers[0].clone()).unwrap();
         let block_header_in_db = result.unwrap();
-        assert_block_header_eq(block_header_in_db, block_header_to_compare);
+        assert_block_header_eq(&block_header_in_db, &block_header_to_compare);
 
         // Check if the second block is inserted
         let result: std::result::Result<BlockHeaderDto, sqlx::Error> =
@@ -794,7 +802,7 @@ mod tests {
         let block_header_to_compare =
             convert_rpc_blockheader_to_dto(block_headers[1].clone()).unwrap();
         let block_header_in_db = result.unwrap();
-        assert_block_header_eq(block_header_in_db, block_header_to_compare);
+        assert_block_header_eq(&block_header_in_db, &block_header_to_compare);
 
         tx.rollback().await.unwrap();
     }
@@ -856,7 +864,7 @@ mod tests {
         let block_header_to_compare =
             convert_rpc_blockheader_to_dto(same_block_header_with_diff_values.clone()).unwrap();
         let block_header_in_db = result.unwrap();
-        assert_block_header_eq(block_header_in_db, block_header_to_compare);
+        assert_block_header_eq(&block_header_in_db, &block_header_to_compare);
 
         tx.rollback().await.unwrap();
     }

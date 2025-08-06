@@ -59,14 +59,14 @@ async fn get_fixtures_for_tests() -> Vec<BlockHeader> {
 
     for i in 0..=5 {
         let json_string = fs::read_to_string(format!(
-            "tests/fixtures/indexer/eth_getBlockByNumber_sepolia_{}.json",
-            i
+            "tests/fixtures/indexer/eth_getBlockByNumber_sepolia_{i}.json"
         ))
         .await
-        .unwrap();
+        .expect("Failed to read fixture file");
 
-        let block = serde_json::from_str::<JsonRpcResponse<BlockHeader>>(&json_string).unwrap();
-        block_fixtures.push(block.result.unwrap());
+        let block = serde_json::from_str::<JsonRpcResponse<BlockHeader>>(&json_string)
+            .expect("Failed to parse JSON fixture");
+        block_fixtures.push(block.result.expect("Expected block result in fixture"));
     }
 
     block_fixtures
@@ -86,7 +86,7 @@ pub async fn start_integration_mock_rpc_server(addr: String) -> Result<Sender<i6
     tokio::spawn(async move {
         while let Some(new_block) = rx.recv().await {
             let mut finalized = current_finalized_clone.write().await;
-            *finalized = new_block as usize;
+            *finalized = usize::try_from(new_block).expect("Block number conversion failed");
         }
     });
 
@@ -98,11 +98,17 @@ pub async fn start_integration_mock_rpc_server(addr: String) -> Result<Sender<i6
             match request.method.as_str() {
                 "eth_getBlockByNumber" => {
                     let data = if request.params.0 == "finalized" {
-                        fixtures.last().unwrap().clone()
+                        fixtures.last().expect("No fixtures available").clone()
                     } else {
-                        let block_number =
-                            usize::from_str_radix(request.params.0.strip_prefix("0x").unwrap(), 16)
-                                .unwrap();
+                        let block_number = usize::from_str_radix(
+                            request
+                                .params
+                                .0
+                                .strip_prefix("0x")
+                                .expect("Expected 0x prefix"),
+                            16,
+                        )
+                        .expect("Failed to parse block number");
 
                         fixtures[block_number].clone()
                     };
@@ -162,11 +168,13 @@ pub async fn start_integration_mock_rpc_server(addr: String) -> Result<Sender<i6
     let listener: TcpListener = TcpListener::bind(addr).await?;
 
     thread::spawn(move || {
-        Runtime::new().unwrap().block_on(async move {
-            axum::serve(listener, app.into_make_service())
-                .await
-                .unwrap();
-        })
+        Runtime::new()
+            .expect("Failed to create runtime")
+            .block_on(async move {
+                axum::serve(listener, app.into_make_service())
+                    .await
+                    .expect("Failed to serve app");
+            });
     });
 
     Ok(tx)

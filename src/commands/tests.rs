@@ -17,12 +17,14 @@ mod unit_tests {
         use super::*;
 
         #[test]
+        #[allow(clippy::assertions_on_constants)] // These tests validate constant ranges at compile time
         fn test_max_concurrent_tasks_constant() {
             assert!(MAX_CONCURRENT_TASKS > 0);
             assert!(MAX_CONCURRENT_TASKS <= 100);
         }
 
         #[test]
+        #[allow(clippy::assertions_on_constants)] // These tests validate constant ranges at compile time
         fn test_timeout_constants() {
             assert!(TASK_TIMEOUT > 0);
             assert!(TIMEOUT > 0);
@@ -33,6 +35,7 @@ mod unit_tests {
         }
 
         #[test]
+        #[allow(clippy::assertions_on_constants)] // These tests validate constant ranges at compile time
         fn test_retry_constant() {
             assert!(MAX_RETRIES > 0);
             assert!(MAX_RETRIES <= 50);

@@ -595,7 +595,7 @@ mod integration_tests {
 
     fn get_test_db_connection() -> String {
         env::var("DATABASE_URL").unwrap_or_else(|_| {
-            "postgresql://postgres:postgres@localhost:5433/fossil_test".to_string()
+            "postgresql://postgres:postgres@localhost:5432/postgres".to_string()
         })
     }
 

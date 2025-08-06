@@ -34,7 +34,7 @@ impl BlockNumber {
 
     /// Gets the inner value
     #[must_use]
-    pub const fn value(&self) -> i64 {
+    pub const fn value(self) -> i64 {
         self.0
     }
 
