@@ -1,0 +1,9 @@
+# Clippy configuration for Fossil Headers DB
+# This file contains project-specific clippy configuration
+
+# Allow unwrap and expect in test code since test code should be able to panic
+# on assertion failures and setup issues
+avoid-breaking-exported-api = false
+
+# Test-specific allowances that complement Cargo.toml configuration
+# These are handled by the Makefile with -A flags for test targets

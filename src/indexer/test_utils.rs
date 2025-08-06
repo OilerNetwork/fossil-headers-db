@@ -22,6 +22,7 @@ impl Default for MockRpcProvider {
 }
 
 impl MockRpcProvider {
+    #[must_use]
     pub fn new() -> Self {
         Self {
             latest_finalized_blocknumber_vec: Mutex::new(VecDeque::new()),
@@ -29,6 +30,7 @@ impl MockRpcProvider {
         }
     }
 
+    #[must_use]
     pub fn new_with_data(
         latest_finalized_blocknumber_vec: VecDeque<BlockNumber>,
         full_block_vec: VecDeque<BlockHeader>,
@@ -42,12 +44,12 @@ impl MockRpcProvider {
 
 impl EthereumRpcProvider for MockRpcProvider {
     async fn get_latest_finalized_blocknumber(&self, _timeout: Option<u64>) -> Result<BlockNumber> {
-        if let Some(res) = self
+        let value = self
             .latest_finalized_blocknumber_vec
             .lock()
             .await
-            .pop_front()
-        {
+            .pop_front();
+        if let Some(res) = value {
             return Ok(res);
         }
         Err(BlockchainError::block_not_found(
@@ -61,7 +63,8 @@ impl EthereumRpcProvider for MockRpcProvider {
         _include_tx: bool,
         _timeout: Option<u64>,
     ) -> Result<BlockHeader> {
-        if let Some(res) = self.full_block_vec.lock().await.pop_front() {
+        let value = self.full_block_vec.lock().await.pop_front();
+        if let Some(res) = value {
             return Ok(res);
         }
         Err(BlockchainError::block_not_found(

@@ -1,5 +1,10 @@
 # Fossil Headers DB - Ethereum Blockchain Indexer
 
+[![CI](https://github.com/ametel01/fossil-headers-db/workflows/Rust%20CI/badge.svg)](https://github.com/ametel01/fossil-headers-db/actions)
+[![Coverage](https://img.shields.io/codecov/c/github/ametel01/fossil-headers-db)](https://codecov.io/gh/ametel01/fossil-headers-db)
+[![License](https://img.shields.io/badge/license-MIT-blue.svg)](LICENSE)
+[![Rust](https://img.shields.io/badge/rust-1.70+-orange.svg)](https://www.rust-lang.org/)
+
 High-performance Ethereum blockchain indexer that fetches and stores block headers and transaction data from genesis to the latest block. Built in Rust for production deployment on AWS ECS.
 
 ## Quick Start

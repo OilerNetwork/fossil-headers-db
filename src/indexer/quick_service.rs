@@ -476,8 +476,7 @@ mod tests {
 
         for i in 0..=5 {
             let json_string = fs::read_to_string(format!(
-                "tests/fixtures/indexer/eth_getBlockByNumber_sepolia_{}.json",
-                i
+                "tests/fixtures/indexer/eth_getBlockByNumber_sepolia_{i}.json"
             ))
             .await
             .unwrap();

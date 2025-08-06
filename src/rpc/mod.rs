@@ -77,6 +77,7 @@ struct RpcRequest<'a, T> {
 }
 
 #[derive(Debug, Serialize, Deserialize, Clone)]
+#[allow(clippy::struct_field_names)] // transaction_index is appropriate for JSON API compatibility
 pub struct Transaction {
     pub hash: String,
     #[serde(rename = "blockNumber")]
@@ -667,7 +668,6 @@ pub fn try_convert_full_tx_vector(block_tx_vec: Vec<BlockTransaction>) -> Result
 /// BIG TODO:
 /// Handle rpc errors correctly!
 /// Currently error cases are not handled as well.
-
 #[cfg(test)]
 mod tests;
 
@@ -722,11 +722,7 @@ mod integration_tests {
                         let request_str = String::from_utf8_lossy(&buffer);
 
                         // Find the JSON body after the empty line in HTTP request
-                        let body = if let Some(idx) = request_str.find("\r\n\r\n") {
-                            &request_str[idx + 4..]
-                        } else {
-                            ""
-                        };
+                        let body = request_str.find("\r\n\r\n").map_or("", |idx| &request_str[idx + 4..]);
 
                         // Get the response from the pre-determined list, and if the list is
                         // exhausted, return the last response.
@@ -756,7 +752,7 @@ mod integration_tests {
                                                     BlockTransaction::Full(full_tx) => {
                                                         BlockTransaction::Hash(full_tx.hash.clone())
                                                     }
-                                                    other => other.clone(),
+                                                    other @ BlockTransaction::Hash(_) => other.clone(),
                                                 })
                                                 .collect(),
                                             ..data
@@ -766,8 +762,7 @@ mod integration_tests {
                                     let final_response =
                                         serde_json::to_string(&final_response).unwrap();
                                     format!(
-                                        r#"{{ "jsonrpc": "2.0", "id": 1, "result": {} }}"#,
-                                        final_response
+                                        r#"{{ "jsonrpc": "2.0", "id": 1, "result": {final_response} }}"#
                                     )
                                 }
                                 None => "{}".to_string(),
@@ -805,13 +800,11 @@ mod integration_tests {
 
         let expected_tx = tx.clone();
 
-        let expected_tx = if let BlockTransaction::Full(full_tx) = expected_tx {
-            full_tx
-        } else {
+        let BlockTransaction::Full(expected_tx) = expected_tx else {
             panic!("unexpected error due to tx type, should not happen.")
         };
 
-        let actual_tx: Result<Transaction> = Transaction::try_from(tx.clone());
+        let actual_tx: Result<Transaction> = Transaction::try_from(tx);
 
         let actual_tx = actual_tx.unwrap();
 
@@ -839,9 +832,7 @@ mod integration_tests {
         // Get one of the tx to test.
         let tx = header.transactions[0].clone();
 
-        let expected_tx = if let BlockTransaction::Full(full_tx) = tx.clone() {
-            full_tx
-        } else {
+        let BlockTransaction::Full(expected_tx) = tx.clone() else {
             panic!("unexpected error due to tx type, should not happen.")
         };
 
@@ -909,7 +900,7 @@ mod integration_tests {
         let client = EthereumJsonRpcClient::new("http://127.0.0.1:8091".to_owned(), 2);
 
         let block =
-            client.get_full_block_by_number(BlockNumber::from_trusted(21598014), false, None);
+            client.get_full_block_by_number(BlockNumber::from_trusted(21_598_014), false, None);
 
         let block = block.await;
         assert!(block.is_err());
@@ -926,7 +917,7 @@ mod integration_tests {
 
         let client = EthereumJsonRpcClient::new("http://127.0.0.1:8092".to_owned(), 2);
         let block =
-            client.get_full_block_by_number(BlockNumber::from_trusted(21598014), false, None);
+            client.get_full_block_by_number(BlockNumber::from_trusted(21_598_014), false, None);
 
         let block = block.await.unwrap();
         assert_eq!(block.hash, rpc_response.hash);
@@ -965,7 +956,7 @@ mod integration_tests {
 
         let client = EthereumJsonRpcClient::new("http://127.0.0.1:8094".to_owned(), 1);
         let block =
-            client.get_full_block_by_number(BlockNumber::from_trusted(21598014), false, None);
+            client.get_full_block_by_number(BlockNumber::from_trusted(21_598_014), false, None);
 
         let block = block.await.unwrap();
         assert_eq!(block.hash, rpc_response.hash);
@@ -974,7 +965,7 @@ mod integration_tests {
             if let BlockTransaction::Hash(hash) = block_tx {
                 let fixture_tx: Transaction =
                     rpc_response.transactions[idx].clone().try_into().unwrap();
-                assert_eq!(hash.to_owned(), fixture_tx.hash)
+                assert_eq!(hash.to_owned(), fixture_tx.hash);
             } else {
                 panic!("returned tx are full.")
             }
@@ -992,7 +983,7 @@ mod integration_tests {
 
         let client = EthereumJsonRpcClient::new("http://127.0.0.1:8095".to_owned(), 1);
         let block =
-            client.get_full_block_by_number(BlockNumber::from_trusted(21598014), true, None);
+            client.get_full_block_by_number(BlockNumber::from_trusted(21_598_014), true, None);
 
         let block = block.await.unwrap();
         assert_eq!(block.hash, rpc_response.hash);

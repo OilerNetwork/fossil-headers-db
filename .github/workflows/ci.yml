@@ -29,7 +29,7 @@ jobs:
       - uses: Swatinem/rust-cache@v2
 
       - name: Run Clippy
-        run: cargo clippy --all-features -- -D warnings
+        run: cargo clippy --all-targets --all-features -- -D warnings -A clippy::unwrap_used -A clippy::expect_used -A clippy::panic
 
   build:
     needs: [fmt, clippy]
@@ -67,8 +67,8 @@ jobs:
             --name test_db \
             -e POSTGRES_USER=postgres \
             -e POSTGRES_PASSWORD=postgres \
-            -e POSTGRES_DB=fossil_test \
-            -p 5433:5432 \
+            -e POSTGRES_DB=postgres \
+            -p 5432:5432 \
             --health-cmd="pg_isready -U postgres" \
             --health-interval=5s \
             --health-timeout=5s \
@@ -81,25 +81,27 @@ jobs:
 
       - name: Run migrations
         run: |
-          export DATABASE_URL="postgresql://postgres:postgres@localhost:5433/fossil_test"
+          export DATABASE_URL="postgresql://postgres:postgres@localhost:5432/postgres"
           cargo install sqlx-cli --version "=0.8.6" --no-default-features --features postgres
           sqlx migrate run
 
       - name: Install required tools
-        run: cargo install cargo-llvm-cov
+        run: |
+          cargo install cargo-llvm-cov
+          rustup component add llvm-tools-preview
 
-      - run: chmod +x scripts/run-test.sh
+      - run: chmod +x build-scripts/run-test.sh
+      - run: chmod +x build-scripts/run-coverage.sh
 
-      - name: Run tests
-        run: scripts/run-test.sh
+      - name: Run tests with coverage
+        run: |
+          export DATABASE_URL="postgresql://postgres:postgres@localhost:5432/postgres"
+          ./build-scripts/run-coverage.sh
 
-      # - uses: hrishikesh-kadam/setup-lcov@v1
-      #   with:
-      #     ref: v2.2
-
-      # - name: Report code coverage
-      #   uses: zgosalvez/github-actions-report-lcov@v4
-      #   with:
-      #     coverage-files: lcov.info
-      #     github-token: ${{ secrets.GITHUB_TOKEN }}
-      #     update-comment: true
+      - name: Upload coverage to Codecov
+        uses: codecov/codecov-action@v4
+        with:
+          file: ./lcov.info
+          flags: unittests
+          name: codecov-umbrella
+          fail_ci_if_error: false

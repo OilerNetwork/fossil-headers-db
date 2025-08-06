@@ -393,11 +393,11 @@ mod tests {
 
     fn get_test_db_connection() -> String {
         env::var("DATABASE_URL").unwrap_or_else(|_| {
-            "postgresql://postgres:postgres@localhost:5433/fossil_test".to_string()
+            "postgresql://postgres:postgres@localhost:5432/postgres".to_string()
         })
     }
 
-    fn assert_block_header_eq(header1: BlockHeaderDto, header2: BlockHeaderDto) {
+    fn assert_block_header_eq(header1: &BlockHeaderDto, header2: &BlockHeaderDto) {
         assert_eq!(header1.number, header2.number);
         assert_eq!(header1.block_hash, header2.block_hash);
         assert_eq!(header1.nonce, header2.nonce);
@@ -425,7 +425,7 @@ mod tests {
         );
     }
 
-    fn assert_transactions_eq(transaction1: TransactionDto, transaction2: TransactionDto) {
+    fn assert_transactions_eq(transaction1: &TransactionDto, transaction2: &TransactionDto) {
         assert_eq!(transaction1.block_number, transaction2.block_number);
         assert_eq!(transaction1.transaction_hash, transaction2.transaction_hash);
         assert_eq!(
@@ -491,7 +491,7 @@ mod tests {
             convert_rpc_blockheader_to_dto(block_headers[0].clone()).unwrap();
         let block_header_in_db = result.unwrap();
 
-        assert_block_header_eq(block_header_in_db, block_header_to_compare);
+        assert_block_header_eq(&block_header_in_db, &block_header_to_compare);
 
         tx.rollback().await.unwrap();
     }
@@ -520,7 +520,7 @@ mod tests {
         let block_header_to_compare =
             convert_rpc_blockheader_to_dto(block_headers[0].clone()).unwrap();
         let block_header_in_db = result.unwrap();
-        assert_block_header_eq(block_header_in_db, block_header_to_compare);
+        assert_block_header_eq(&block_header_in_db, &block_header_to_compare);
 
         // Check if the second block is inserted
         let result: std::result::Result<BlockHeaderDto, sqlx::Error> =
@@ -533,7 +533,7 @@ mod tests {
         let block_header_to_compare =
             convert_rpc_blockheader_to_dto(block_headers[1].clone()).unwrap();
         let block_header_in_db = result.unwrap();
-        assert_block_header_eq(block_header_in_db, block_header_to_compare);
+        assert_block_header_eq(&block_header_in_db, &block_header_to_compare);
 
         tx.rollback().await.unwrap();
     }
@@ -593,7 +593,7 @@ mod tests {
         let block_header_to_compare =
             convert_rpc_blockheader_to_dto(same_block_header_with_diff_values.clone()).unwrap();
         let block_header_in_db = result.unwrap();
-        assert_block_header_eq(block_header_in_db, block_header_to_compare);
+        assert_block_header_eq(&block_header_in_db, &block_header_to_compare);
 
         tx.rollback().await.unwrap();
     }
@@ -623,7 +623,7 @@ mod tests {
 
         let transaction_to_compare = convert_rpc_transaction_to_dto(transaction.clone()).unwrap();
         let transaction_in_db = result.unwrap();
-        assert_transactions_eq(transaction_in_db, transaction_to_compare);
+        assert_transactions_eq(&transaction_in_db, &transaction_to_compare);
 
         tx.rollback().await.unwrap();
     }
@@ -657,7 +657,7 @@ mod tests {
 
         let transaction_to_compare = convert_rpc_transaction_to_dto(transaction_1.clone()).unwrap();
         let transaction_in_db = result.unwrap();
-        assert_transactions_eq(transaction_in_db, transaction_to_compare);
+        assert_transactions_eq(&transaction_in_db, &transaction_to_compare);
 
         let result: std::result::Result<TransactionDto, sqlx::Error> =
             sqlx::query_as("SELECT * FROM transactions WHERE transaction_hash = $1")
@@ -668,7 +668,7 @@ mod tests {
 
         let transaction_to_compare = convert_rpc_transaction_to_dto(transaction_2.clone()).unwrap();
         let transaction_in_db = result.unwrap();
-        assert_transactions_eq(transaction_in_db, transaction_to_compare);
+        assert_transactions_eq(&transaction_in_db, &transaction_to_compare);
 
         tx.rollback().await.unwrap();
     }
@@ -730,7 +730,7 @@ mod tests {
         let transaction_to_compare =
             convert_rpc_transaction_to_dto(same_transaction_with_diff_values.clone()).unwrap();
         let transaction_in_db = result.unwrap();
-        assert_transactions_eq(transaction_in_db, transaction_to_compare);
+        assert_transactions_eq(&transaction_in_db, &transaction_to_compare);
 
         tx.rollback().await.unwrap();
     }
@@ -760,7 +760,7 @@ mod tests {
             convert_rpc_blockheader_to_dto(block_headers[0].clone()).unwrap();
         let block_header_in_db = result.unwrap();
 
-        assert_block_header_eq(block_header_in_db, block_header_to_compare);
+        assert_block_header_eq(&block_header_in_db, &block_header_to_compare);
 
         tx.rollback().await.unwrap();
     }
@@ -789,7 +789,7 @@ mod tests {
         let block_header_to_compare =
             convert_rpc_blockheader_to_dto(block_headers[0].clone()).unwrap();
         let block_header_in_db = result.unwrap();
-        assert_block_header_eq(block_header_in_db, block_header_to_compare);
+        assert_block_header_eq(&block_header_in_db, &block_header_to_compare);
 
         // Check if the second block is inserted
         let result: std::result::Result<BlockHeaderDto, sqlx::Error> =
@@ -802,7 +802,7 @@ mod tests {
         let block_header_to_compare =
             convert_rpc_blockheader_to_dto(block_headers[1].clone()).unwrap();
         let block_header_in_db = result.unwrap();
-        assert_block_header_eq(block_header_in_db, block_header_to_compare);
+        assert_block_header_eq(&block_header_in_db, &block_header_to_compare);
 
         tx.rollback().await.unwrap();
     }
@@ -864,7 +864,7 @@ mod tests {
         let block_header_to_compare =
             convert_rpc_blockheader_to_dto(same_block_header_with_diff_values.clone()).unwrap();
         let block_header_in_db = result.unwrap();
-        assert_block_header_eq(block_header_in_db, block_header_to_compare);
+        assert_block_header_eq(&block_header_in_db, &block_header_to_compare);
 
         tx.rollback().await.unwrap();
     }

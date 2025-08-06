@@ -234,7 +234,7 @@ mod tests {
 
     fn get_test_db_connection() -> String {
         env::var("DATABASE_URL").unwrap_or_else(|_| {
-            "postgresql://postgres:postgres@localhost:5433/fossil_test".to_string()
+            "postgresql://postgres:postgres@localhost:5432/postgres".to_string()
         })
     }
 
@@ -265,7 +265,7 @@ mod tests {
                 .await;
 
         assert!(result.is_ok());
-        assert_eq!(result.unwrap().current_latest_block_number, 123123);
+        assert_eq!(result.unwrap().current_latest_block_number, 123_123);
 
         update_latest_quick_index_block_number_query(&mut tx, 1)
             .await
@@ -311,7 +311,7 @@ mod tests {
         assert!(result.is_ok());
         assert_eq!(result.unwrap().backfilling_block_number, None);
 
-        update_backfilling_block_number_query(&mut tx, 100000)
+        update_backfilling_block_number_query(&mut tx, 100_000)
             .await
             .unwrap();
 
@@ -321,7 +321,7 @@ mod tests {
                 .await;
 
         assert!(result.is_ok());
-        assert_eq!(result.unwrap().backfilling_block_number.unwrap(), 100000);
+        assert_eq!(result.unwrap().backfilling_block_number.unwrap(), 100_000);
 
         tx.rollback().await.unwrap();
     }
