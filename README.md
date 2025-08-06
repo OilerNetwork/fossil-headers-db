@@ -2,7 +2,7 @@
 
 [![CI](https://github.com/OilerNetwork/fossil-headers-db/actions/workflows/ci.yml/badge.svg)](https://github.com/OilerNetwork/fossil-headers-db/actions/workflows/ci.yml)
 [![Coverage](https://img.shields.io/codecov/c/github/OilerNetwork/fossil-headers-db)](https://codecov.io/gh/OilerNetwork/fossil-headers-db)
-[![License](https://img.shields.io/badge/license-MIT-blue.svg)](LICENSE)
+[![License](https://img.shields.io/badge/License-GNU%20GPL-blue)](LICENSE)
 [![Rust](https://img.shields.io/badge/rust-1.70+-orange.svg)](https://www.rust-lang.org/)
 
 High-performance Ethereum blockchain indexer that fetches and stores block headers and transaction data from genesis to the latest block. Built in Rust for production deployment on AWS ECS.
