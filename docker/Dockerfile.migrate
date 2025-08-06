@@ -8,9 +8,9 @@ RUN cargo install sqlx-cli --version "=0.8.6" --no-default-features --features p
 
 # Copy migrations and scripts
 COPY migrations ./migrations
-COPY scripts ./scripts
+COPY build-scripts ./build-scripts
 
 # Make scripts executable
-RUN chmod +x ./scripts/run-migrations.sh
+RUN chmod +x ./build-scripts/run-migrations.sh
 
-CMD ["./scripts/run-migrations.sh"]
+CMD ["./build-scripts/run-migrations.sh"]

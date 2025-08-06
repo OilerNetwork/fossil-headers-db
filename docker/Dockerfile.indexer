@@ -8,17 +8,25 @@ RUN apt-get update && apt-get install -y \
 
 WORKDIR /usr/app
 COPY . .
-RUN cargo install sqlx-cli --version "=0.8.6" --no-default-features --features postgres
 RUN cargo build --release
 
 FROM debian:12-slim
 WORKDIR /usr/app
 COPY --from=builder /usr/app/target/release/fossil_indexer .
 
-# Install any necessary runtime dependencies
-RUN apt-get update && apt-get install -y libssl-dev ca-certificates && rm -rf /var/lib/apt/lists/*
+# Install runtime dependencies including curl for health checks
+RUN apt-get update && apt-get install -y \
+    libssl-dev \
+    ca-certificates \
+    curl \
+    && rm -rf /var/lib/apt/lists/*
 
-EXPOSE 5050
+# Health check endpoint
+HEALTHCHECK --interval=30s --timeout=10s --start-period=5s --retries=3 \
+    CMD curl -f http://localhost:3000/health || exit 1
+
+# Expose port (matches default ROUTER_ENDPOINT)
+EXPOSE 3000
 
 ENV RUST_LOG=info
 
