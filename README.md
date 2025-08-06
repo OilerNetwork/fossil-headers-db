@@ -1,7 +1,7 @@
 # Fossil Headers DB - Ethereum Blockchain Indexer
 
-[![CI](https://github.com/ametel01/fossil-headers-db/workflows/Rust%20CI/badge.svg)](https://github.com/ametel01/fossil-headers-db/actions)
-[![Coverage](https://img.shields.io/codecov/c/github/ametel01/fossil-headers-db)](https://codecov.io/gh/ametel01/fossil-headers-db)
+[![CI](https://github.com/OilerNetwork/fossil-headers-db/actions/workflows/ci.yml/badge.svg)](https://github.com/OilerNetwork/fossil-headers-db/actions/workflows/ci.yml)
+[![Coverage](https://img.shields.io/codecov/c/github/OilerNetwork/fossil-headers-db)](https://codecov.io/gh/OilerNetwork/fossil-headers-db)
 [![License](https://img.shields.io/badge/license-MIT-blue.svg)](LICENSE)
 [![Rust](https://img.shields.io/badge/rust-1.70+-orange.svg)](https://www.rust-lang.org/)
 
