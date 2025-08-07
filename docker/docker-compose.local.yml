@@ -19,13 +19,11 @@ services:
       - "3000:3000"
     networks:
       - local_network
+    env_file:
+      - ../.env
     environment:
       - DB_CONNECTION_STRING=postgres://postgres:postgres@db:5432/postgres
-      - NODE_CONNECTION_STRING=${NODE_CONNECTION_STRING:-https://sepolia.infura.io/v3/your-api-key}
       - ROUTER_ENDPOINT=0.0.0.0:3000
-      - INDEX_TRANSACTIONS=false
-      - RUST_LOG=debug
-      - START_BLOCK_OFFSET=1024
     depends_on:
       db:
         condition: service_healthy
