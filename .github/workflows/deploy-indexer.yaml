@@ -10,7 +10,7 @@ env:
   ECS_SERVICE: fossil-indexer-ecs
   ECS_CLUSTER: fossil-ecs-cluster
   CONTAINER_NAME: fossil-indexer
-  TASK_NAME: fossil-indexer
+  TASK_NAME: fossil-indexer-ecs
 
 permissions:
   id-token: write
