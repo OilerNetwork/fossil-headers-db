@@ -57,7 +57,7 @@ jobs:
           echo "IMAGE_URI=$IMAGE_URI" >> $GITHUB_ENV
           docker buildx build \
             --platform=linux/amd64 \
-            -f ./docker/Dockerfile.indexer \
+            -f ./docker/Dockerfile \
             -t $IMAGE_URI \
             ./
           docker push $IMAGE_URI
