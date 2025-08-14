@@ -20,6 +20,7 @@ use crate::{
     },
     rpc::EthereumRpcProvider,
     types::BlockNumber,
+    utils::convert_hex_string_to_i64,
 };
 
 #[derive(Debug)]
@@ -363,7 +364,22 @@ where
         let block_headers = self
             .fetch_block_headers(block_range, starting_block, ending_block)
             .await?;
-        self.store_block_headers(block_headers, ending_block).await
+        self.store_block_headers(block_headers, ending_block)
+            .await?;
+
+        // Verify blocks were actually stored
+        if let Err(e) = self
+            .verify_blocks_stored(starting_block, ending_block)
+            .await
+        {
+            error!(
+                "[quick_index] Block storage verification failed for range {} to {}: {}",
+                starting_block, ending_block, e
+            );
+            return Err(eyre!("Block storage verification failed: {}. This indicates a critical database consistency issue.", e));
+        }
+
+        Ok(())
     }
 
     async fn fetch_block_headers(
@@ -407,24 +423,64 @@ where
         starting_block: i64,
         ending_block: i64,
     ) -> Result<Vec<crate::rpc::BlockHeader>> {
-        let mut block_headers = Vec::with_capacity(rpc_responses.len());
-        let mut has_err = false;
+        let expected_count = usize::try_from(ending_block - starting_block + 1).map_err(|_| {
+            eyre!(
+                "Invalid block range: {} to {}",
+                starting_block,
+                ending_block
+            )
+        })?;
+        if rpc_responses.len() != expected_count {
+            return Err(eyre!(
+                "Response count mismatch: expected {}, got {}",
+                expected_count,
+                rpc_responses.len()
+            ));
+        }
 
-        for response in rpc_responses {
+        let mut block_headers = Vec::with_capacity(expected_count);
+        let mut failed_blocks = Vec::new();
+
+        for (idx, response) in rpc_responses.into_iter().enumerate() {
+            let block_num = starting_block + i64::try_from(idx).unwrap_or(0);
             match response {
-                Ok(header) => block_headers.push(header),
+                Ok(header) => {
+                    // Verify the block number matches what we expect
+                    let actual_block_num = convert_hex_string_to_i64(&header.number).map_err(|e| {
+                        eyre!("Invalid block number in header for block {}: '{}' failed to parse with error: {}", block_num, header.number, e)
+                    })?;
+
+                    if actual_block_num != block_num {
+                        return Err(eyre!(
+                            "Block number mismatch: expected {}, got {}",
+                            block_num,
+                            actual_block_num
+                        ));
+                    }
+
+                    block_headers.push(header);
+                }
                 Err(e) => {
-                    has_err = true;
+                    failed_blocks.push(block_num);
                     warn!(
-                        "[quick_index] Error retrieving block in range from {} to {}. error: {}",
-                        starting_block, ending_block, e
+                        "[quick_index] Error retrieving block {}. error: {}",
+                        block_num, e
                     );
                 }
             }
         }
 
-        if has_err {
-            return Err(eyre!("One or more RPC calls failed"));
+        if !failed_blocks.is_empty() {
+            return Err(eyre!("RPC calls failed for blocks: {:?}. NO BLOCKS WILL BE PROCESSED until ALL blocks in range are successfully fetched.", failed_blocks));
+        }
+
+        // Double-check we have exactly the expected count
+        if block_headers.len() != expected_count {
+            return Err(eyre!(
+                "Internal error: expected {} blocks, but only {} were successfully processed",
+                expected_count,
+                block_headers.len()
+            ));
         }
 
         Ok(block_headers)
@@ -435,16 +491,73 @@ where
         block_headers: Vec<crate::rpc::BlockHeader>,
         ending_block: i64,
     ) -> Result<()> {
+        if block_headers.is_empty() {
+            return Err(eyre!("Cannot store empty block headers"));
+        }
+
+        // Sort blocks by number to ensure correct ordering in database
+        let mut sorted_headers = block_headers;
+        sorted_headers.sort_by_key(|h| convert_hex_string_to_i64(&h.number).unwrap_or(0));
+
+        // Verify sequential block numbers before any database operations
+        let first_block = convert_hex_string_to_i64(&sorted_headers[0].number).map_err(|e| {
+            eyre!(
+                "Invalid block number in first header: '{}' failed to parse with error: {}",
+                sorted_headers[0].number,
+                e
+            )
+        })?;
+
+        for (idx, header) in sorted_headers.iter().enumerate() {
+            let expected_block_num = first_block + i64::try_from(idx).unwrap_or(0);
+            let actual_block_num = convert_hex_string_to_i64(&header.number).map_err(|e| {
+                eyre!("Invalid block number in header at index {}: '{}' failed to parse with error: {}", idx, header.number, e)
+            })?;
+
+            if actual_block_num != expected_block_num {
+                return Err(eyre!(
+                    "Non-sequential blocks detected: expected {}, got {} at index {}",
+                    expected_block_num,
+                    actual_block_num,
+                    idx
+                ));
+            }
+        }
+
+        // Verify ending block matches
+        let last_block_num = convert_hex_string_to_i64(&sorted_headers.last().unwrap().number)
+            .map_err(|e| {
+                eyre!(
+                    "Invalid block number in last header: '{}' failed to parse with error: {}",
+                    sorted_headers.last().unwrap().number,
+                    e
+                )
+            })?;
+        if last_block_num != ending_block {
+            return Err(eyre!(
+                "Ending block mismatch: expected {}, got {}",
+                ending_block,
+                last_block_num
+            ));
+        }
+
+        // Begin atomic database transaction
         let mut db_tx = self.db.pool.begin().await?;
 
         if self.config.should_index_txs {
-            insert_block_header_query(&mut db_tx, block_headers).await?;
+            insert_block_header_query(&mut db_tx, sorted_headers).await?;
         } else {
-            insert_block_header_only_query(&mut db_tx, block_headers).await?;
+            insert_block_header_only_query(&mut db_tx, sorted_headers).await?;
         }
 
+        // Only update metadata after successful block insertion
         update_latest_quick_index_block_number_query(&mut db_tx, ending_block).await?;
-        db_tx.commit().await?;
+
+        // Commit transaction - if this fails, nothing was persisted
+        db_tx.commit().await.map_err(|e| {
+            error!("[quick_index] Database transaction failed after successful block insertion ending at block {}: {}", ending_block, e);
+            eyre!("Database transaction commit failed: {}", e)
+        })?;
 
         Ok(())
     }
@@ -452,6 +565,59 @@ where
     async fn apply_exponential_backoff(&self, retry_count: u8) {
         let backoff = (u64::from(retry_count)).pow(2) * 5;
         tokio::time::sleep(Duration::from_secs(backoff)).await;
+    }
+
+    async fn verify_blocks_stored(&self, starting_block: i64, ending_block: i64) -> Result<()> {
+        let expected_count = usize::try_from(ending_block - starting_block + 1).map_err(|_| {
+            eyre!(
+                "Invalid block range: {} to {}",
+                starting_block,
+                ending_block
+            )
+        })?;
+
+        let actual_count: i64 =
+            sqlx::query_scalar("SELECT COUNT(*) FROM blockheaders WHERE number BETWEEN $1 AND $2")
+                .bind(starting_block)
+                .bind(ending_block)
+                .fetch_one(&self.db.pool)
+                .await?;
+
+        if usize::try_from(actual_count).unwrap_or(0) != expected_count {
+            return Err(eyre!("Block storage verification failed: expected {} blocks, found {} in database for range {} to {}", expected_count, actual_count, starting_block, ending_block));
+        }
+
+        // Additional check: verify no gaps in the sequence
+        let gap_count: i64 = sqlx::query_scalar(
+            r"
+            WITH RECURSIVE expected_blocks AS (
+                SELECT $1::bigint AS block_num
+                UNION ALL
+                SELECT block_num + 1
+                FROM expected_blocks
+                WHERE block_num < $2
+            )
+            SELECT COUNT(*) 
+            FROM expected_blocks e
+            LEFT JOIN blockheaders b ON e.block_num = b.number
+            WHERE b.number IS NULL
+            ",
+        )
+        .bind(starting_block)
+        .bind(ending_block)
+        .fetch_one(&self.db.pool)
+        .await?;
+
+        if gap_count > 0 {
+            return Err(eyre!(
+                "Found {} gaps in block sequence between {} and {}",
+                gap_count,
+                starting_block,
+                ending_block
+            ));
+        }
+
+        Ok(())
     }
 }
 

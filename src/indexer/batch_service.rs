@@ -22,6 +22,7 @@ use crate::{
     },
     rpc::EthereumRpcProvider,
     types::BlockNumber,
+    utils::convert_hex_string_to_i64,
 };
 
 #[derive(Debug)]
@@ -311,6 +312,7 @@ where
     }
 
     // Indexing a block range, inclusive.
+    #[allow(clippy::cognitive_complexity)]
     async fn index_block_range(
         &self,
         starting_block: i64,
@@ -341,6 +343,23 @@ where
             if error_count == 0 {
                 self.save_blocks_to_database(block_headers, starting_block, ending_block)
                     .await?;
+
+                // Verify blocks were actually stored
+                if let Err(e) = self
+                    .verify_blocks_stored(starting_block, ending_block)
+                    .await
+                {
+                    error!(
+                        "[batch_index] Block storage verification failed for range {} to {}: {}",
+                        starting_block, ending_block, e
+                    );
+                    return Err(eyre!("Block storage verification failed: {}. This indicates a critical database consistency issue.", e));
+                }
+
+                info!(
+                    "[batch_index] Successfully stored and verified blocks {} to {}",
+                    starting_block, ending_block
+                );
                 return Ok(());
             }
 
@@ -405,6 +424,7 @@ where
             .collect()
     }
 
+    #[allow(clippy::cognitive_complexity)]
     fn process_block_responses(
         responses: Vec<
             Result<Result<crate::rpc::BlockHeader, eyre::Report>, tokio::task::JoinError>,
@@ -419,7 +439,28 @@ where
             let block_num = starting_block + i64::try_from(idx).unwrap_or(0);
             match join_result {
                 Ok(Ok(header)) => {
-                    block_headers.push(header);
+                    // Verify the block number matches what we expect
+                    match convert_hex_string_to_i64(&header.number) {
+                        Ok(actual_block_num) if actual_block_num == block_num => {
+                            block_headers.push(header);
+                        }
+                        Ok(actual_block_num) => {
+                            error_count += 1;
+                            failed_blocks.push(block_num);
+                            warn!(
+                                "[batch_index] Block number mismatch for block {}: expected {}, got {}",
+                                block_num, block_num, actual_block_num
+                            );
+                        }
+                        Err(e) => {
+                            error_count += 1;
+                            failed_blocks.push(block_num);
+                            warn!(
+                                "[batch_index] Invalid block number in header for block {}: header.number='{}' (length={}, bytes={:?}) failed to parse with error: {}",
+                                block_num, header.number, header.number.len(), header.number.as_bytes(), e
+                            );
+                        }
+                    }
                 }
                 Ok(Err(e)) => {
                     error_count += 1;
@@ -438,6 +479,16 @@ where
                     );
                 }
             }
+        }
+
+        // Critical check: If ANY block failed, we must have error_count > 0
+        // This ensures no partial batch processing
+        if !failed_blocks.is_empty() && error_count == 0 {
+            error_count = i32::try_from(failed_blocks.len()).unwrap_or(i32::MAX);
+            warn!(
+                "[batch_index] Inconsistent error state detected, setting error_count to {}",
+                error_count
+            );
         }
 
         (block_headers, error_count, failed_blocks)
@@ -474,12 +525,41 @@ where
         starting_block: i64,
         ending_block: i64,
     ) -> Result<()> {
+        // Validate completeness before any database operations
+        let expected_count = usize::try_from(ending_block - starting_block + 1).map_err(|_| {
+            eyre!(
+                "Invalid block range: {} to {}",
+                starting_block,
+                ending_block
+            )
+        })?;
+        if block_headers.len() != expected_count {
+            return Err(eyre!("Incomplete block range: expected {} blocks, got {}. NO BLOCKS WILL BE STORED until ALL blocks in range are available.", expected_count, block_headers.len()));
+        }
+
+        // Sort blocks by number to ensure correct insertion order
+        let mut sorted_headers = block_headers;
+        sorted_headers.sort_by_key(|h| convert_hex_string_to_i64(&h.number).unwrap_or(0));
+
+        // Verify we have all blocks in the range with correct sequential ordering
+        for (idx, header) in sorted_headers.iter().enumerate() {
+            let expected_block_num = starting_block + i64::try_from(idx).unwrap_or(0);
+            let actual_block_num = convert_hex_string_to_i64(&header.number).map_err(|e| {
+                eyre!("Invalid block number in header at index {}: '{}' failed to parse with error: {}", idx, header.number, e)
+            })?;
+
+            if actual_block_num != expected_block_num {
+                return Err(eyre!("Missing or out-of-order block {} in range {} to {}. Expected sequential block {}, got {}.", expected_block_num, starting_block, ending_block, expected_block_num, actual_block_num));
+            }
+        }
+
+        // Begin atomic database transaction
         let mut db_tx = self.db.pool.begin().await?;
 
         if self.config.should_index_txs {
-            insert_block_header_query(&mut db_tx, block_headers).await?;
+            insert_block_header_query(&mut db_tx, sorted_headers).await?;
         } else {
-            insert_block_header_only_query(&mut db_tx, block_headers).await?;
+            insert_block_header_only_query(&mut db_tx, sorted_headers).await?;
         }
 
         update_backfilling_block_number_query(&mut db_tx, starting_block).await?;
@@ -488,8 +568,11 @@ where
             set_is_backfilling(&mut db_tx, false).await?;
         }
 
-        // Commit at the end
-        db_tx.commit().await?;
+        // Commit transaction - if this fails, nothing was persisted
+        db_tx.commit().await.map_err(|e| {
+            error!("[batch_index] Database transaction failed after successful block insertion for range {} to {}: {}", starting_block, ending_block, e);
+            eyre!("Database transaction commit failed: {}", e)
+        })?;
 
         info!(
             "[batch_index] Indexing block range from {} to {} complete.",
@@ -501,6 +584,59 @@ where
     async fn apply_retry_backoff(&self, attempt: u8) {
         let backoff = u64::from(attempt).pow(2) * 5;
         tokio::time::sleep(Duration::from_secs(backoff)).await;
+    }
+
+    async fn verify_blocks_stored(&self, starting_block: i64, ending_block: i64) -> Result<()> {
+        let expected_count = usize::try_from(ending_block - starting_block + 1).map_err(|_| {
+            eyre!(
+                "Invalid block range: {} to {}",
+                starting_block,
+                ending_block
+            )
+        })?;
+
+        let actual_count: i64 =
+            sqlx::query_scalar("SELECT COUNT(*) FROM blockheaders WHERE number BETWEEN $1 AND $2")
+                .bind(starting_block)
+                .bind(ending_block)
+                .fetch_one(&self.db.pool)
+                .await?;
+
+        if usize::try_from(actual_count).unwrap_or(0) != expected_count {
+            return Err(eyre!("Block storage verification failed: expected {} blocks, found {} in database for range {} to {}", expected_count, actual_count, starting_block, ending_block));
+        }
+
+        // Additional check: verify no gaps in the sequence
+        let gap_count: i64 = sqlx::query_scalar(
+            r"
+            WITH RECURSIVE expected_blocks AS (
+                SELECT $1::bigint AS block_num
+                UNION ALL
+                SELECT block_num + 1
+                FROM expected_blocks
+                WHERE block_num < $2
+            )
+            SELECT COUNT(*) 
+            FROM expected_blocks e
+            LEFT JOIN blockheaders b ON e.block_num = b.number
+            WHERE b.number IS NULL
+            ",
+        )
+        .bind(starting_block)
+        .bind(ending_block)
+        .fetch_one(&self.db.pool)
+        .await?;
+
+        if gap_count > 0 {
+            return Err(eyre!(
+                "Found {} gaps in block sequence between {} and {}",
+                gap_count,
+                starting_block,
+                ending_block
+            ));
+        }
+
+        Ok(())
     }
 }
 
@@ -571,14 +707,21 @@ mod tests {
         let db = DbConnection::new(url).await.unwrap();
         let mock_rpc = Arc::new(MockRpcProvider::new_with_data(
             vec![].into(),
-            vec![
-                block_fixtures[5].clone(),
-                block_fixtures[4].clone(),
-                block_fixtures[3].clone(),
-                block_fixtures[2].clone(),
-                block_fixtures[1].clone(),
-                block_fixtures[0].clone(),
-            ]
+            {
+                // Create enough mock data to handle retries (6 blocks * 15 attempts each)
+                let mut mock_blocks = Vec::new();
+                for _ in 0..15 {
+                    mock_blocks.extend([
+                        block_fixtures[0].clone(),
+                        block_fixtures[1].clone(),
+                        block_fixtures[2].clone(),
+                        block_fixtures[3].clone(),
+                        block_fixtures[4].clone(),
+                        block_fixtures[5].clone(),
+                    ]);
+                }
+                mock_blocks
+            }
             .into(),
         ));
         let should_terminate = Arc::new(AtomicBool::new(false));
@@ -598,13 +741,16 @@ mod tests {
 
         let indexer = BatchIndexer::new(config, db.clone(), mock_rpc, should_terminate.clone());
 
-        task::spawn(async move {
+        let handle = task::spawn(async move {
             indexer.index().await.unwrap();
         });
 
         // Wait until its indexed
         sleep(Duration::from_secs(1)).await;
         should_terminate.store(true, Ordering::Relaxed);
+
+        // Wait for the indexer to complete
+        let _ = handle.await;
 
         let metadata = get_index_metadata(db.clone()).await.unwrap().unwrap();
         assert_eq!(metadata.backfilling_block_number, Some(0));
@@ -653,14 +799,21 @@ mod tests {
         let db = DbConnection::new(url).await.unwrap();
         let mock_rpc = Arc::new(MockRpcProvider::new_with_data(
             vec![].into(),
-            vec![
-                block_fixtures[5].clone(),
-                block_fixtures[4].clone(),
-                block_fixtures[3].clone(),
-                block_fixtures[2].clone(),
-                block_fixtures[1].clone(),
-                block_fixtures[0].clone(),
-            ]
+            {
+                // Create enough mock data to handle retries (6 blocks * 15 attempts each)
+                let mut mock_blocks = Vec::new();
+                for _ in 0..15 {
+                    mock_blocks.extend([
+                        block_fixtures[0].clone(),
+                        block_fixtures[1].clone(),
+                        block_fixtures[2].clone(),
+                        block_fixtures[3].clone(),
+                        block_fixtures[4].clone(),
+                        block_fixtures[5].clone(),
+                    ]);
+                }
+                mock_blocks
+            }
             .into(),
         ));
         let should_terminate = Arc::new(AtomicBool::new(false));
@@ -680,13 +833,16 @@ mod tests {
 
         let indexer = BatchIndexer::new(config, db.clone(), mock_rpc, should_terminate.clone());
 
-        task::spawn(async move {
+        let handle = task::spawn(async move {
             indexer.index().await.unwrap();
         });
 
         // Wait until its indexed
         sleep(Duration::from_secs(1)).await;
         should_terminate.store(true, Ordering::Relaxed);
+
+        // Wait for the indexer to complete
+        let _ = handle.await;
 
         let metadata = get_index_metadata(db.clone()).await.unwrap().unwrap();
         assert_eq!(metadata.backfilling_block_number, Some(0));
@@ -752,12 +908,20 @@ mod tests {
         // In this case let's simulate that the latest block number starts from 3 instead.
         let mock_rpc = Arc::new(MockRpcProvider::new_with_data(
             vec![].into(),
-            vec![
-                block_fixtures[3].clone(),
-                block_fixtures[2].clone(),
-                block_fixtures[1].clone(),
-                block_fixtures[0].clone(),
-            ]
+            {
+                // Create enough mock data to handle retries
+                // The batch indexer requests blocks 0,1,2,3 in order, so we need to provide them in that order
+                let mut mock_blocks = Vec::new();
+                for _ in 0..15 {
+                    mock_blocks.extend([
+                        block_fixtures[0].clone(),
+                        block_fixtures[1].clone(),
+                        block_fixtures[2].clone(),
+                        block_fixtures[3].clone(),
+                    ]);
+                }
+                mock_blocks
+            }
             .into(),
         ));
 
@@ -776,13 +940,16 @@ mod tests {
 
         let indexer = BatchIndexer::new(config, db.clone(), mock_rpc, should_terminate.clone());
 
-        task::spawn(async move {
+        let handle = task::spawn(async move {
             indexer.index().await.unwrap();
         });
 
         // Wait until its indexed
         sleep(Duration::from_secs(1)).await;
         should_terminate.store(true, Ordering::Relaxed);
+
+        // Wait for the indexer to complete
+        let _ = handle.await;
 
         let metadata = get_index_metadata(db.clone()).await.unwrap().unwrap();
         assert_eq!(metadata.backfilling_block_number, Some(0));

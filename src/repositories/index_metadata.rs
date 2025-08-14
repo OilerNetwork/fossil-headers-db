@@ -244,6 +244,12 @@ mod tests {
         let db = DbConnection::new(url).await.unwrap();
         let mut tx = db.pool.begin().await.unwrap();
 
+        // Clear the table first to ensure clean state
+        sqlx::query("DELETE FROM index_metadata")
+            .execute(&mut *tx)
+            .await
+            .unwrap();
+
         sqlx::query(
             "INSERT INTO index_metadata (
                 current_latest_block_number,
@@ -288,6 +294,12 @@ mod tests {
         let db = DbConnection::new(url).await.unwrap();
         let mut tx = db.pool.begin().await.unwrap();
 
+        // Clear the table first to ensure clean state
+        sqlx::query("DELETE FROM index_metadata")
+            .execute(&mut *tx)
+            .await
+            .unwrap();
+
         sqlx::query(
             "INSERT INTO index_metadata (
                 current_latest_block_number,
@@ -331,6 +343,12 @@ mod tests {
         let url = get_test_db_connection();
         let db = DbConnection::new(url).await.unwrap();
         let mut tx = db.pool.begin().await.unwrap();
+
+        // Clear the table first to ensure clean state
+        sqlx::query("DELETE FROM index_metadata")
+            .execute(&mut *tx)
+            .await
+            .unwrap();
 
         sqlx::query(
             "INSERT INTO index_metadata (
