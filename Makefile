@@ -54,6 +54,10 @@ dev-down: ## Stop local development environment
 	@echo "Stopping local development environment..."
 	docker compose -f docker/docker-compose.local.yml down
 
+dev-down-volumes: ## Stop local development environment and remove volumes
+	@echo "Stopping local development environment and removing volumes..."
+	docker compose -f docker/docker-compose.local.yml down --volumes
+
 dev-clean: ## Stop and clean local development environment (removes volumes)
 	@echo "Cleaning local development environment..."
 	docker compose -f docker/docker-compose.local.yml down -v
@@ -62,8 +66,13 @@ dev-clean: ## Stop and clean local development environment (removes volumes)
 # Application
 run-indexer: ## Run the modern indexer service (production)
 	@echo "Starting modern indexer service..."
-	@echo "Ensure .env file is configured or export required environment variables"
-	cargo run --bin fossil_indexer
+	@if [ -f .env ]; then \
+		echo "Loading environment variables from .env..."; \
+		export $$(grep -v '^#' .env | xargs) && cargo run --bin fossil_indexer; \
+	else \
+		echo "No .env file found, using system environment variables"; \
+		cargo run --bin fossil_indexer; \
+	fi
 
 run-cli: ## Run the legacy CLI tool (debugging)
 	@echo "Available CLI commands:"
