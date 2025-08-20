@@ -39,8 +39,14 @@ pub async fn main() -> Result<()> {
         .ok()
         .and_then(|s| s.parse::<u64>().ok());
 
-    // Initialize tracing subscriber
-    fmt().init();
+    // Initialize tracing subscriber with human-readable format
+    fmt()
+        .with_target(false)
+        .with_thread_ids(false)
+        .with_file(false)
+        .with_line_number(false)
+        .compact()
+        .init();
 
     let should_terminate = Arc::new(AtomicBool::new(false));
 

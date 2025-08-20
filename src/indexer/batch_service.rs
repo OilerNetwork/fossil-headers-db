@@ -285,6 +285,20 @@ where
         }
     }
 
+    async fn get_total_block_count(&self) -> Result<i64> {
+        let count: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM blockheaders")
+            .fetch_one(&self.db.pool)
+            .await?;
+        Ok(count)
+    }
+
+    async fn get_latest_block_number(&self) -> Result<i64> {
+        let latest: Option<i64> = sqlx::query_scalar("SELECT MAX(number) FROM blockheaders")
+            .fetch_one(&self.db.pool)
+            .await?;
+        Ok(latest.unwrap_or(0))
+    }
+
     fn is_backfilling_complete(
         current_backfilling_block_number: i64,
         index_start_block_number: i64,
@@ -356,9 +370,11 @@ where
                     return Err(eyre!("Block storage verification failed: {}. This indicates a critical database consistency issue.", e));
                 }
 
+                let total_blocks = self.get_total_block_count().await.unwrap_or(0);
+                let latest_block = self.get_latest_block_number().await.unwrap_or(0);
                 info!(
-                    "[batch_index] Successfully stored and verified blocks {} to {}",
-                    starting_block, ending_block
+                    "Verified blocks {} to {}. Total blocks in DB: {}, Latest block: {}",
+                    starting_block, ending_block, total_blocks, latest_block
                 );
                 return Ok(());
             }
@@ -574,9 +590,11 @@ where
             eyre!("Database transaction commit failed: {}", e)
         })?;
 
+        let total_blocks = self.get_total_block_count().await.unwrap_or(0);
+        let latest_block = self.get_latest_block_number().await.unwrap_or(0);
         info!(
-            "[batch_index] Indexing block range from {} to {} complete.",
-            starting_block, ending_block
+            "Indexed blocks {} to {}. Total blocks in DB: {}, Latest block: {}",
+            starting_block, ending_block, total_blocks, latest_block
         );
         Ok(())
     }

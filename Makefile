@@ -29,7 +29,9 @@ test: ## Run all tests
 
 lint: ## Run clippy linter
 	@echo "Running clippy..."
-	cargo clippy --all-targets --all-features -- -D warnings -A clippy::unwrap_used -A clippy::expect_used -A clippy::panic
+	cargo clippy --lib --bins -- -D warnings
+	@echo "Running clippy on tests (with panic allowed)..."
+	cargo clippy --tests -- -D warnings -A clippy::unwrap_used -A clippy::expect_used -A clippy::panic
 
 format: ## Format code using rustfmt
 	@echo "Formatting code..."
