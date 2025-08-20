@@ -53,8 +53,6 @@ use tokio::{net::TcpListener, time::sleep};
 
 use crate::db::check_db_connection;
 
-mod handlers;
-
 pub async fn initialize_router(should_terminate: Arc<AtomicBool>) -> Result<()> {
     let app = Router::new().route(
         "/",

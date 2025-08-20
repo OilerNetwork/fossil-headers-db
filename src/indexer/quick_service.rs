@@ -9,7 +9,7 @@ use std::{
 use eyre::{eyre, Result};
 use futures::future::try_join_all;
 use tokio::task;
-use tracing::{error, info, warn};
+use tracing::{debug, error, info, warn};
 
 use crate::{
     db::DbConnection,
@@ -274,7 +274,7 @@ where
     }
 
     async fn wait_for_new_blocks(&self, new_latest_block: BlockNumber) -> Result<()> {
-        info!(
+        debug!(
             "No new block finalized. Latest: {}. Sleeping for {}s...",
             new_latest_block, self.config.poll_interval
         );
@@ -311,7 +311,8 @@ where
                     .await,
                 Ok(())
             ) {
-                Self::log_indexing_success(starting_block, ending_block);
+                self.log_indexing_success(starting_block, ending_block)
+                    .await;
                 return Ok(());
             }
 
@@ -340,10 +341,26 @@ where
             .await
     }
 
-    fn log_indexing_success(starting_block: i64, ending_block: i64) {
+    async fn get_total_block_count(&self) -> Result<i64> {
+        let count: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM blockheaders")
+            .fetch_one(&self.db.pool)
+            .await?;
+        Ok(count)
+    }
+
+    async fn get_latest_block_number(&self) -> Result<i64> {
+        let latest: Option<i64> = sqlx::query_scalar("SELECT MAX(number) FROM blockheaders")
+            .fetch_one(&self.db.pool)
+            .await?;
+        Ok(latest.unwrap_or(0))
+    }
+
+    async fn log_indexing_success(&self, starting_block: i64, ending_block: i64) {
+        let total_blocks = self.get_total_block_count().await.unwrap_or(0);
+        let latest_block = self.get_latest_block_number().await.unwrap_or(0);
         info!(
-            "[quick_index] Indexing block range from {} to {} complete.",
-            starting_block, ending_block
+            "Indexed blocks {} to {}. Total blocks in DB: {}, Latest block: {}",
+            starting_block, ending_block, total_blocks, latest_block
         );
     }
 
@@ -525,14 +542,16 @@ where
         }
 
         // Verify ending block matches
-        let last_block_num = convert_hex_string_to_i64(&sorted_headers.last().unwrap().number)
-            .map_err(|e| {
-                eyre!(
-                    "Invalid block number in last header: '{}' failed to parse with error: {}",
-                    sorted_headers.last().unwrap().number,
-                    e
-                )
-            })?;
+        let last_header = sorted_headers
+            .last()
+            .ok_or_else(|| eyre!("No headers available after sorting (this should not happen)"))?;
+        let last_block_num = convert_hex_string_to_i64(&last_header.number).map_err(|e| {
+            eyre!(
+                "Invalid block number in last header: '{}' failed to parse with error: {}",
+                last_header.number,
+                e
+            )
+        })?;
         if last_block_num != ending_block {
             return Err(eyre!(
                 "Ending block mismatch: expected {}, got {}",

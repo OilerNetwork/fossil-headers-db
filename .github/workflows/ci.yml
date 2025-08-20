@@ -26,8 +26,11 @@ jobs:
 
       - uses: Swatinem/rust-cache@v2
 
-      - name: Run Clippy
-        run: cargo clippy --all-targets --all-features -- -D warnings -A clippy::unwrap_used -A clippy::expect_used -A clippy::panic
+      - name: Run Clippy on production code
+        run: cargo clippy --lib --bins -- -D warnings
+
+      - name: Run Clippy on tests (with panic allowed)
+        run: cargo clippy --tests -- -D warnings -A clippy::unwrap_used -A clippy::expect_used -A clippy::panic
 
   build:
     needs: [fmt, clippy]

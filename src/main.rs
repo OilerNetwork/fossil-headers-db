@@ -41,8 +41,15 @@ enum Mode {
 async fn main() -> Result<()> {
     dotenvy::dotenv().ok();
 
-    // Initialize tracing subscriber
-    fmt().with_env_filter(EnvFilter::from_default_env()).init();
+    // Initialize tracing subscriber with human-readable format
+    fmt()
+        .with_env_filter(EnvFilter::from_default_env())
+        .with_target(false)
+        .with_thread_ids(false)
+        .with_file(false)
+        .with_line_number(false)
+        .compact()
+        .init();
 
     info!("Starting Indexer");
 

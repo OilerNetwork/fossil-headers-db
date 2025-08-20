@@ -798,9 +798,7 @@ mod integration_tests {
         // Get one of the tx to test.
         let tx = header.transactions[0].clone();
 
-        let expected_tx = tx.clone();
-
-        let BlockTransaction::Full(expected_tx) = expected_tx else {
+        let BlockTransaction::Full(expected_tx) = tx.clone() else {
             panic!("unexpected error due to tx type, should not happen.")
         };
 
