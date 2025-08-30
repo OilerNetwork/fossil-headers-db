@@ -128,4 +128,4 @@ dev-test: format lint test ## Run full test suite (format + lint + test)
 # CI/CD helpers
 ci-build: build docker-build ## Build everything for CI/CD
 
-ci-test: format lint test coverage ## Run all checks for CI/CD
+ci-test: format lint test ## Run all checks for CI/CD

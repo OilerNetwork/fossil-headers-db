@@ -16,9 +16,7 @@ use crate::{
     errors::BlockchainError,
     repositories::{
         block_header::{insert_block_header_only_query, insert_block_header_query},
-        index_metadata::{
-            get_index_metadata, set_is_backfilling, update_backfilling_block_number_query,
-        },
+        index_metadata::{get_index_metadata, set_is_backfilling},
     },
     rpc::EthereumRpcProvider,
     types::BlockNumber,
@@ -240,31 +238,162 @@ where
     // TODO: Since this is similar to the quick indexer with the only exception being the block logic,
     // maybe we could DRY this?
     pub async fn index(&self) -> Result<()> {
-        // Batch indexer loop. does the following until terminated:
-        // 1. check if finished indexing (backfilling block is 0)
-        // 2. check current starting block and backfilling block
-        // 3. if not fully indexed, index the block in batches (20 seems to be good for batch, but should be adjustable)
-        // 4. if it is fully indexed, do nothing (maybe we could exit this too?)
+        info!("[batch_index] Starting SMART gap-filling batch indexer");
+
+        // Debug initial state
+        let initial_metadata = self.get_current_metadata().await?;
+        info!("[batch_index] Initial metadata - latest: {}, starting: {}, is_backfilling: {}, backfilling_block_number: {:?}",
+              initial_metadata.current_latest_block_number,
+              initial_metadata.indexing_starting_block_number,
+              initial_metadata.is_backfilling,
+              initial_metadata.backfilling_block_number);
+
         while !self.should_terminate.load(Ordering::Relaxed) {
-            let current_index_metadata = self.get_current_metadata().await?;
-
-            let index_start_block_number = current_index_metadata.indexing_starting_block_number;
-            let current_backfilling_block_number = current_index_metadata
-                .backfilling_block_number
-                .unwrap_or(index_start_block_number);
-
-            if Self::is_backfilling_complete(
-                current_backfilling_block_number,
-                index_start_block_number,
-            ) {
-                break;
+            if self.process_missing_blocks_cycle().await? {
+                break; // Backfill complete
             }
 
-            let (starting_block, ending_block) = self
-                .calculate_block_range(current_backfilling_block_number, index_start_block_number);
+            // Sleep before next scan to avoid overwhelming the system
+            tokio::time::sleep(Duration::from_millis(u64::from(self.config.poll_interval))).await;
+        }
+        Ok(())
+    }
 
-            self.index_block_range(starting_block, ending_block, &self.should_terminate)
+    #[allow(clippy::cognitive_complexity)]
+    async fn process_missing_blocks_cycle(&self) -> Result<bool> {
+        let current_index_metadata = self.get_current_metadata().await?;
+        let index_start_block_number = current_index_metadata.indexing_starting_block_number;
+        let backfilling_block_number = current_index_metadata
+            .backfilling_block_number
+            .unwrap_or(current_index_metadata.current_latest_block_number);
+
+        Self::validate_backfill_configuration(index_start_block_number);
+
+        info!(
+            "[batch_index] Scanning for missing blocks from {} to {} (batch indexer range)",
+            index_start_block_number, backfilling_block_number
+        );
+
+        let missing_blocks = self
+            .find_missing_blocks(index_start_block_number, backfilling_block_number)
+            .await?;
+
+        info!(
+            "[batch_index] Found {} missing blocks: {:?}",
+            missing_blocks.len(),
+            missing_blocks
+        );
+
+        if missing_blocks.is_empty() {
+            info!("[batch_index] No missing blocks found! Backfill complete.");
+            self.mark_backfill_complete().await?;
+            return Ok(true); // Backfill complete
+        }
+
+        info!(
+            "[batch_index] Found {} missing blocks. Starting targeted gap filling.",
+            missing_blocks.len()
+        );
+
+        self.process_missing_blocks_in_batches(&missing_blocks)
+            .await?;
+
+        info!("[batch_index] Finished processing missing blocks, checking completion for start_block {}", index_start_block_number);
+
+        // Check if we've filled all blocks to the start - if so, we're done
+        if self
+            .is_backfill_complete(index_start_block_number, backfilling_block_number)
+            .await?
+        {
+            info!("[batch_index] All missing blocks filled, marking backfill complete.");
+            info!(
+                "[batch_index] Setting backfilling_block_number to {}",
+                index_start_block_number
+            );
+            // Set backfilling_block_number to the target (should be starting block)
+            self.update_backfilling_progress(index_start_block_number)
                 .await?;
+            self.mark_backfill_complete().await?;
+            return Ok(true); // Backfill complete
+        }
+        Ok(false) // Continue processing
+    }
+
+    fn validate_backfill_configuration(index_start_block_number: i64) {
+        if index_start_block_number != 0 {
+            warn!(
+                "[batch_index] indexing_starting_block_number is {}, should be 0 for complete backfill",
+                index_start_block_number
+            );
+        }
+    }
+
+    async fn find_missing_blocks(
+        &self,
+        start_block: i64,
+        end_block: i64,
+    ) -> Result<Vec<BlockNumber>> {
+        // Use the indexer's own database connection instead of the global one
+        self.find_missing_blocks_with_db(start_block, end_block)
+            .await
+    }
+
+    async fn find_missing_blocks_with_db(
+        &self,
+        start_block: i64,
+        end_block: i64,
+    ) -> Result<Vec<BlockNumber>> {
+        let mut missing_blocks = Vec::new();
+        let mut current_start = start_block;
+        let chunk_size = 10000i64;
+
+        while current_start <= end_block {
+            let current_end = std::cmp::min(current_start + chunk_size - 1, end_block);
+
+            let result: Vec<(i64,)> = sqlx::query_as(
+                r"
+                SELECT n FROM generate_series($1::bigint, $2::bigint) AS n
+                WHERE n NOT IN (SELECT number FROM blockheaders WHERE number BETWEEN $1 AND $2)
+                ORDER BY n
+                ",
+            )
+            .bind(current_start)
+            .bind(current_end)
+            .fetch_all(&self.db.pool)
+            .await
+            .map_err(|e| {
+                eyre!(
+                    "Failed to find missing blocks in range {}-{}: {}",
+                    current_start,
+                    current_end,
+                    e
+                )
+            })?;
+
+            missing_blocks.extend(
+                result
+                    .into_iter()
+                    .map(|(block_num,)| BlockNumber::from_trusted(block_num)),
+            );
+
+            current_start = current_end + 1;
+        }
+
+        Ok(missing_blocks)
+    }
+
+    async fn process_missing_blocks_in_batches(
+        &self,
+        missing_blocks: &[BlockNumber],
+    ) -> Result<()> {
+        let batch_size = self.config.index_batch_size as usize;
+
+        for batch in missing_blocks.chunks(batch_size) {
+            if self.should_terminate.load(Ordering::Relaxed) {
+                info!("[batch_index] Termination requested. Stopping gap filling.");
+                break;
+            }
+            self.fill_missing_blocks(batch).await?;
         }
         Ok(())
     }
@@ -285,133 +414,144 @@ where
         }
     }
 
-    async fn get_total_block_count(&self) -> Result<i64> {
-        let count: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM blockheaders")
-            .fetch_one(&self.db.pool)
-            .await?;
-        Ok(count)
+    /// Marks backfill as complete by disabling backfilling flag
+    async fn mark_backfill_complete(&self) -> Result<()> {
+        let mut tx = self
+            .db
+            .pool
+            .begin()
+            .await
+            .map_err(|e| eyre!("Failed to begin transaction: {}", e))?;
+
+        set_is_backfilling(&mut tx, false).await?;
+
+        tx.commit()
+            .await
+            .map_err(|e| eyre!("Failed to commit backfill completion: {}", e))?;
+
+        info!("[batch_index] Backfill marked as complete");
+        Ok(())
     }
 
-    async fn get_latest_block_number(&self) -> Result<i64> {
-        let latest: Option<i64> = sqlx::query_scalar("SELECT MAX(number) FROM blockheaders")
-            .fetch_one(&self.db.pool)
-            .await?;
-        Ok(latest.unwrap_or(0))
-    }
-
-    fn is_backfilling_complete(
-        current_backfilling_block_number: i64,
-        index_start_block_number: i64,
-    ) -> bool {
-        if current_backfilling_block_number <= index_start_block_number {
-            info!("[batch_index] Backfilling complete, reached starting block {}. Terminating backfilling process.", index_start_block_number);
-            return true;
-        }
-        false
-    }
-
-    fn calculate_block_range(
-        &self,
-        current_backfilling_block_number: i64,
-        index_start_block_number: i64,
-    ) -> (i64, i64) {
-        let backfilling_target_block =
-            current_backfilling_block_number - i64::from(self.config.index_batch_size);
-        let starting_block_number: i64 = if backfilling_target_block < index_start_block_number {
-            index_start_block_number
-        } else {
-            backfilling_target_block
-        };
-        (starting_block_number, current_backfilling_block_number)
-    }
-
-    // Indexing a block range, inclusive.
-    #[allow(clippy::cognitive_complexity)]
-    async fn index_block_range(
-        &self,
-        starting_block: i64,
-        ending_block: i64,
-        should_terminate: &AtomicBool,
-    ) -> Result<()> {
-        let block_range: Vec<i64> = (starting_block..=ending_block).collect();
+    /// Fill specific missing blocks (smart gap filling)
+    async fn fill_missing_blocks(&self, missing_blocks: &[BlockNumber]) -> Result<()> {
         let semaphore = Arc::new(Semaphore::new(self.config.max_concurrent_requests));
 
-        for i in 0..self.config.max_retries {
-            if should_terminate.load(Ordering::Relaxed) {
-                info!("[batch_index] Termination requested. Stopping quick indexing.");
+        for retry_attempt in 0..self.config.max_retries {
+            if self.should_terminate.load(Ordering::Relaxed) {
+                info!("[batch_index] Termination requested during gap filling");
                 break;
             }
 
-            let (block_headers, error_count, failed_blocks) =
-                self.fetch_block_headers(&block_range, &semaphore).await?;
-
-            self.apply_backpressure_if_needed(
-                error_count,
-                &block_range,
-                starting_block,
-                ending_block,
-                &failed_blocks,
-            )
-            .await;
-
-            if error_count == 0 {
-                self.save_blocks_to_database(block_headers, starting_block, ending_block)
-                    .await?;
-
-                // Verify blocks were actually stored
-                if let Err(e) = self
-                    .verify_blocks_stored(starting_block, ending_block)
-                    .await
-                {
-                    error!(
-                        "[batch_index] Block storage verification failed for range {} to {}: {}",
-                        starting_block, ending_block, e
-                    );
-                    return Err(eyre!("Block storage verification failed: {}. This indicates a critical database consistency issue.", e));
-                }
-
-                let total_blocks = self.get_total_block_count().await.unwrap_or(0);
-                let latest_block = self.get_latest_block_number().await.unwrap_or(0);
+            if let Some(block_headers) = self
+                .try_fetch_missing_blocks(missing_blocks, &semaphore, retry_attempt)
+                .await?
+            {
+                self.store_gap_blocks(block_headers).await?;
                 info!(
-                    "Verified blocks {} to {}. Total blocks in DB: {}, Latest block: {}",
-                    starting_block, ending_block, total_blocks, latest_block
+                    "[batch_index] Successfully filled {} missing blocks",
+                    missing_blocks.len()
                 );
                 return Ok(());
             }
 
-            // If there's an error during rpc, retry.
-            error!("[batch_index] Error encountered during rpc, retry no. {}. Re-running from block: {}", i, starting_block);
-
-            self.apply_retry_backoff(i).await;
+            // Apply backoff between retries
+            self.apply_fetch_retry_backoff(retry_attempt).await;
         }
 
-        Err(eyre!("Max retries reached. Stopping batch indexing."))
+        Err(eyre!("Max retries reached filling missing blocks"))
     }
 
-    async fn fetch_block_headers(
+    async fn try_fetch_missing_blocks(
         &self,
-        block_range: &[i64],
+        missing_blocks: &[BlockNumber],
+        semaphore: &Arc<Semaphore>,
+        retry_attempt: u8,
+    ) -> Result<Option<Vec<crate::rpc::BlockHeader>>> {
+        let (block_headers, error_count, failed_blocks) = self
+            .fetch_specific_blocks(missing_blocks, semaphore)
+            .await?;
+
+        if error_count > 0 {
+            self.log_fetch_errors(error_count, retry_attempt, &failed_blocks);
+
+            if retry_attempt == self.config.max_retries - 1 {
+                return Err(eyre!("Max retries reached. Stopping batch indexing."));
+            }
+            return Ok(None); // Retry needed
+        }
+
+        Ok(Some(block_headers)) // Success
+    }
+
+    fn log_fetch_errors(&self, error_count: i32, retry_attempt: u8, failed_blocks: &[i64]) {
+        warn!(
+            "[batch_index] {} blocks failed to fetch on attempt {}/{}. Failed blocks: {:?}",
+            error_count,
+            retry_attempt + 1,
+            self.config.max_retries,
+            failed_blocks
+        );
+    }
+
+    async fn apply_fetch_retry_backoff(&self, retry_attempt: u8) {
+        let backoff = (retry_attempt + 1).pow(2) * 5;
+        tokio::time::sleep(Duration::from_secs(backoff.into())).await;
+    }
+
+    async fn is_backfill_complete(&self, start_block: i64, end_block: i64) -> Result<bool> {
+        // Check if there are any missing blocks between start and end (inclusive)
+        let missing_blocks = self.find_missing_blocks(start_block, end_block).await?;
+        Ok(missing_blocks.is_empty())
+    }
+
+    async fn update_backfilling_progress(&self, target_block: i64) -> Result<()> {
+        let mut tx = self
+            .db
+            .pool
+            .begin()
+            .await
+            .map_err(|e| eyre!("Failed to begin transaction: {}", e))?;
+
+        sqlx::query("UPDATE index_metadata SET backfilling_block_number = $1, updated_at = CURRENT_TIMESTAMP")
+            .bind(target_block)
+            .execute(&mut *tx)
+            .await
+            .map_err(|e| eyre!("Failed to update backfilling progress: {}", e))?;
+
+        tx.commit()
+            .await
+            .map_err(|e| eyre!("Failed to commit backfilling progress: {}", e))?;
+
+        Ok(())
+    }
+
+    /// Fetch specific blocks (not sequential ranges)
+    async fn fetch_specific_blocks(
+        &self,
+        block_numbers: &[BlockNumber],
         semaphore: &Arc<Semaphore>,
     ) -> Result<(Vec<crate::rpc::BlockHeader>, i32, Vec<i64>)> {
-        let rpc_block_headers_futures = self.create_block_fetch_tasks(block_range, semaphore);
+        let rpc_block_headers_futures =
+            self.create_specific_block_fetch_tasks(block_numbers, semaphore);
         let rpc_block_headers_response = join_all(rpc_block_headers_futures).await;
 
-        Ok(Self::process_block_responses(
+        Ok(Self::process_specific_block_responses(
             rpc_block_headers_response,
-            block_range[0],
+            block_numbers,
         ))
     }
 
-    fn create_block_fetch_tasks(
+    fn create_specific_block_fetch_tasks(
         &self,
-        block_range: &[i64],
+        block_numbers: &[BlockNumber],
         semaphore: &Arc<Semaphore>,
     ) -> Vec<task::JoinHandle<Result<crate::rpc::BlockHeader, eyre::Report>>> {
         let timeout = self.config.rpc_timeout;
         let should_index_txs = self.config.should_index_txs;
         let task_timeout = self.config.task_timeout;
 
-        block_range
+        block_numbers
             .iter()
             .map(|&block_number| {
                 let provider = self.rpc_provider.clone();
@@ -427,7 +567,7 @@ where
                     tokio::time::timeout(
                         Duration::from_secs(task_timeout.into()),
                         provider.get_full_block_by_number(
-                            BlockNumber::from_trusted(block_number),
+                            block_number,
                             should_index_txs,
                             Some(timeout.into()),
                         ),
@@ -440,219 +580,115 @@ where
             .collect()
     }
 
-    #[allow(clippy::cognitive_complexity)]
-    fn process_block_responses(
+    fn process_specific_block_responses(
         responses: Vec<
             Result<Result<crate::rpc::BlockHeader, eyre::Report>, tokio::task::JoinError>,
         >,
-        starting_block: i64,
+        block_numbers: &[BlockNumber],
     ) -> (Vec<crate::rpc::BlockHeader>, i32, Vec<i64>) {
         let mut block_headers = Vec::with_capacity(responses.len());
         let mut error_count = 0;
         let mut failed_blocks = Vec::new();
 
         for (idx, join_result) in responses.into_iter().enumerate() {
-            let block_num = starting_block + i64::try_from(idx).unwrap_or(0);
-            match join_result {
-                Ok(Ok(header)) => {
-                    // Verify the block number matches what we expect
-                    match convert_hex_string_to_i64(&header.number) {
-                        Ok(actual_block_num) if actual_block_num == block_num => {
-                            block_headers.push(header);
-                        }
-                        Ok(actual_block_num) => {
-                            error_count += 1;
-                            failed_blocks.push(block_num);
-                            warn!(
-                                "[batch_index] Block number mismatch for block {}: expected {}, got {}",
-                                block_num, block_num, actual_block_num
-                            );
-                        }
-                        Err(e) => {
-                            error_count += 1;
-                            failed_blocks.push(block_num);
-                            warn!(
-                                "[batch_index] Invalid block number in header for block {}: header.number='{}' (length={}, bytes={:?}) failed to parse with error: {}",
-                                block_num, header.number, header.number.len(), header.number.as_bytes(), e
-                            );
-                        }
-                    }
-                }
-                Ok(Err(e)) => {
-                    error_count += 1;
-                    failed_blocks.push(block_num);
-                    warn!(
-                        "[batch_index] Error retrieving block {}. error: {}",
-                        block_num, e
-                    );
-                }
-                Err(e) => {
-                    error_count += 1;
-                    failed_blocks.push(block_num);
-                    warn!(
-                        "[batch_index] Error retrieving block {}. error: {}",
-                        block_num, e
-                    );
-                }
-            }
-        }
+            let expected_block_num = block_numbers[idx].value();
 
-        // Critical check: If ANY block failed, we must have error_count > 0
-        // This ensures no partial batch processing
-        if !failed_blocks.is_empty() && error_count == 0 {
-            error_count = i32::try_from(failed_blocks.len()).unwrap_or(i32::MAX);
-            warn!(
-                "[batch_index] Inconsistent error state detected, setting error_count to {}",
-                error_count
-            );
+            if let Ok(header) = Self::process_single_block_response(join_result, expected_block_num)
+            {
+                block_headers.push(header);
+            } else {
+                error_count += 1;
+                failed_blocks.push(expected_block_num);
+            }
         }
 
         (block_headers, error_count, failed_blocks)
     }
 
-    #[allow(clippy::cast_precision_loss)]
-    async fn apply_backpressure_if_needed(
-        &self,
-        error_count: i32,
-        block_range: &[i64],
-        starting_block: i64,
-        ending_block: i64,
-        failed_blocks: &[i64],
-    ) {
-        let error_rate = f64::from(error_count) / block_range.len() as f64;
-        if error_rate > 0.2 {
-            warn!(
-                "[batch_index] High error rate ({:.1}%) in range {} to {}. Failed blocks: {:?}",
-                error_rate * 100.0,
-                starting_block,
-                ending_block,
-                failed_blocks
-            );
-
-            // Apply exponential backoff for high error rates
-            let backoff_secs = if error_rate > 0.5 { 10 } else { 5 };
-            tokio::time::sleep(Duration::from_secs(backoff_secs)).await;
+    fn process_single_block_response(
+        join_result: Result<Result<crate::rpc::BlockHeader, eyre::Report>, tokio::task::JoinError>,
+        expected_block_num: i64,
+    ) -> Result<crate::rpc::BlockHeader, ()> {
+        match join_result {
+            Ok(Ok(header)) => Self::validate_block_header(header, expected_block_num),
+            Ok(Err(e)) => {
+                warn!(
+                    "[batch_index] Error retrieving block {}: {}",
+                    expected_block_num, e
+                );
+                Err(())
+            }
+            Err(e) => {
+                warn!(
+                    "[batch_index] Task error for block {}: {}",
+                    expected_block_num, e
+                );
+                Err(())
+            }
         }
     }
 
-    async fn save_blocks_to_database(
-        &self,
-        block_headers: Vec<crate::rpc::BlockHeader>,
-        starting_block: i64,
-        ending_block: i64,
-    ) -> Result<()> {
-        // Validate completeness before any database operations
-        let expected_count = usize::try_from(ending_block - starting_block + 1).map_err(|_| {
-            eyre!(
-                "Invalid block range: {} to {}",
-                starting_block,
-                ending_block
-            )
-        })?;
-        if block_headers.len() != expected_count {
-            return Err(eyre!("Incomplete block range: expected {} blocks, got {}. NO BLOCKS WILL BE STORED until ALL blocks in range are available.", expected_count, block_headers.len()));
-        }
-
-        // Sort blocks by number to ensure correct insertion order
-        let mut sorted_headers = block_headers;
-        sorted_headers.sort_by_key(|h| convert_hex_string_to_i64(&h.number).unwrap_or(0));
-
-        // Verify we have all blocks in the range with correct sequential ordering
-        for (idx, header) in sorted_headers.iter().enumerate() {
-            let expected_block_num = starting_block + i64::try_from(idx).unwrap_or(0);
-            let actual_block_num = convert_hex_string_to_i64(&header.number).map_err(|e| {
-                eyre!("Invalid block number in header at index {}: '{}' failed to parse with error: {}", idx, header.number, e)
-            })?;
-
-            if actual_block_num != expected_block_num {
-                return Err(eyre!("Missing or out-of-order block {} in range {} to {}. Expected sequential block {}, got {}.", expected_block_num, starting_block, ending_block, expected_block_num, actual_block_num));
+    fn validate_block_header(
+        header: crate::rpc::BlockHeader,
+        expected_block_num: i64,
+    ) -> Result<crate::rpc::BlockHeader, ()> {
+        match convert_hex_string_to_i64(&header.number) {
+            Ok(actual_block_num) if actual_block_num == expected_block_num => Ok(header),
+            Ok(actual_block_num) => {
+                warn!(
+                    "[batch_index] Block number mismatch for block {}: expected {}, got {}",
+                    expected_block_num, expected_block_num, actual_block_num
+                );
+                Err(())
+            }
+            Err(e) => {
+                warn!(
+                    "[batch_index] Invalid block number in header for block {}: {}",
+                    expected_block_num, e
+                );
+                Err(())
             }
         }
+    }
+
+    /// Store gap-filled blocks (not necessarily sequential)
+    async fn store_gap_blocks(&self, block_headers: Vec<crate::rpc::BlockHeader>) -> Result<()> {
+        if block_headers.is_empty() {
+            return Ok(());
+        }
+
+        // Sort blocks by number for consistent storage
+        let mut sorted_headers = block_headers;
+        sorted_headers.sort_by_key(|h| convert_hex_string_to_i64(&h.number).unwrap_or(0));
 
         // Begin atomic database transaction
         let mut db_tx = self.db.pool.begin().await?;
 
         if self.config.should_index_txs {
-            insert_block_header_query(&mut db_tx, sorted_headers).await?;
+            insert_block_header_query(&mut db_tx, sorted_headers.clone()).await?;
         } else {
-            insert_block_header_only_query(&mut db_tx, sorted_headers).await?;
-        }
-
-        update_backfilling_block_number_query(&mut db_tx, starting_block).await?;
-
-        if starting_block == 0 {
-            set_is_backfilling(&mut db_tx, false).await?;
+            insert_block_header_only_query(&mut db_tx, sorted_headers.clone()).await?;
         }
 
         // Commit transaction - if this fails, nothing was persisted
         db_tx.commit().await.map_err(|e| {
-            error!("[batch_index] Database transaction failed after successful block insertion for range {} to {}: {}", starting_block, ending_block, e);
+            error!(
+                "[batch_index] Database transaction failed after gap block insertion: {}",
+                e
+            );
             eyre!("Database transaction commit failed: {}", e)
         })?;
 
-        let total_blocks = self.get_total_block_count().await.unwrap_or(0);
-        let latest_block = self.get_latest_block_number().await.unwrap_or(0);
+        let block_numbers: Vec<i64> = sorted_headers
+            .iter()
+            .map(|h| convert_hex_string_to_i64(&h.number).unwrap_or(0))
+            .collect();
+
         info!(
-            "Indexed blocks {} to {}. Total blocks in DB: {}, Latest block: {}",
-            starting_block, ending_block, total_blocks, latest_block
+            "[batch_index] Stored {} gap blocks: {:?}",
+            sorted_headers.len(),
+            block_numbers
         );
-        Ok(())
-    }
-
-    async fn apply_retry_backoff(&self, attempt: u8) {
-        let backoff = u64::from(attempt).pow(2) * 5;
-        tokio::time::sleep(Duration::from_secs(backoff)).await;
-    }
-
-    async fn verify_blocks_stored(&self, starting_block: i64, ending_block: i64) -> Result<()> {
-        let expected_count = usize::try_from(ending_block - starting_block + 1).map_err(|_| {
-            eyre!(
-                "Invalid block range: {} to {}",
-                starting_block,
-                ending_block
-            )
-        })?;
-
-        let actual_count: i64 =
-            sqlx::query_scalar("SELECT COUNT(*) FROM blockheaders WHERE number BETWEEN $1 AND $2")
-                .bind(starting_block)
-                .bind(ending_block)
-                .fetch_one(&self.db.pool)
-                .await?;
-
-        if usize::try_from(actual_count).unwrap_or(0) != expected_count {
-            return Err(eyre!("Block storage verification failed: expected {} blocks, found {} in database for range {} to {}", expected_count, actual_count, starting_block, ending_block));
-        }
-
-        // Additional check: verify no gaps in the sequence
-        let gap_count: i64 = sqlx::query_scalar(
-            r"
-            WITH RECURSIVE expected_blocks AS (
-                SELECT $1::bigint AS block_num
-                UNION ALL
-                SELECT block_num + 1
-                FROM expected_blocks
-                WHERE block_num < $2
-            )
-            SELECT COUNT(*) 
-            FROM expected_blocks e
-            LEFT JOIN blockheaders b ON e.block_num = b.number
-            WHERE b.number IS NULL
-            ",
-        )
-        .bind(starting_block)
-        .bind(ending_block)
-        .fetch_one(&self.db.pool)
-        .await?;
-
-        if gap_count > 0 {
-            return Err(eyre!(
-                "Found {} gaps in block sequence between {} and {}",
-                gap_count,
-                starting_block,
-                ending_block
-            ));
-        }
 
         Ok(())
     }
@@ -764,7 +800,7 @@ mod tests {
         });
 
         // Wait until its indexed
-        sleep(Duration::from_secs(1)).await;
+        sleep(Duration::from_secs(5)).await;
         should_terminate.store(true, Ordering::Relaxed);
 
         // Wait for the indexer to complete

@@ -325,6 +325,122 @@ pub async fn find_first_gap(start: BlockNumber, end: BlockNumber) -> Result<Opti
     Ok(result.map(|r| BlockNumber::from_trusted(r.0)))
 }
 
+/// Efficiently finds ALL missing blocks in a range using gap detection
+///
+/// This function identifies contiguous ranges of missing blocks rather than
+/// individual gaps, making backfill much more efficient.
+pub async fn find_missing_block_ranges(
+    start: BlockNumber,
+    end: BlockNumber,
+) -> Result<Vec<(BlockNumber, BlockNumber)>> {
+    let pool = get_db_pool().await?;
+
+    // Find all gaps using a more efficient approach
+    // This query finds the start and end of each gap range
+    let result: Vec<(i64, i64)> = sqlx::query_as(
+        r"
+        WITH RECURSIVE number_series(n) AS (
+            SELECT $1::bigint
+            UNION ALL
+            SELECT n + 1 FROM number_series WHERE n < $2
+        ),
+        missing_numbers AS (
+            SELECT n FROM number_series
+            WHERE n NOT IN (SELECT number FROM blockheaders WHERE number BETWEEN $1 AND $2)
+        ),
+        gap_groups AS (
+            SELECT 
+                n,
+                n - ROW_NUMBER() OVER (ORDER BY n) as grp
+            FROM missing_numbers
+        )
+        SELECT 
+            MIN(n) as range_start,
+            MAX(n) as range_end
+        FROM gap_groups
+        GROUP BY grp
+        ORDER BY range_start
+        ",
+    )
+    .bind(start.value())
+    .bind(end.value())
+    .fetch_all(&*pool)
+    .await
+    .map_err(|e| {
+        BlockchainError::database_query(format!("Failed to find missing block ranges: {e}"))
+    })?;
+
+    Ok(result
+        .into_iter()
+        .map(|(start, end)| {
+            (
+                BlockNumber::from_trusted(start),
+                BlockNumber::from_trusted(end),
+            )
+        })
+        .collect())
+}
+
+/// Efficiently finds missing blocks in chunks to avoid memory issues with large ranges
+///
+/// This function processes the database in chunks and returns individual missing blocks,
+/// properly handling both single block gaps and contiguous ranges.
+pub async fn find_missing_blocks_chunked(
+    start: BlockNumber,
+    end: BlockNumber,
+    chunk_size: i64,
+) -> Result<Vec<BlockNumber>> {
+    let mut missing_blocks = Vec::new();
+    let mut current_start = start.value();
+
+    while current_start <= end.value() {
+        let current_end = std::cmp::min(current_start + chunk_size - 1, end.value());
+
+        // Use direct gap detection for better single block handling
+        let chunk_missing = find_missing_blocks_in_range(
+            BlockNumber::from_trusted(current_start),
+            BlockNumber::from_trusted(current_end),
+        )
+        .await?;
+
+        missing_blocks.extend(chunk_missing);
+        current_start = current_end + 1;
+    }
+
+    Ok(missing_blocks)
+}
+
+/// Finds all missing blocks in a specific range (optimized for single blocks and small ranges)
+///
+/// This function directly returns individual missing block numbers without grouping,
+/// making it perfect for handling single block gaps like block 8960310.
+pub async fn find_missing_blocks_in_range(
+    start: BlockNumber,
+    end: BlockNumber,
+) -> Result<Vec<BlockNumber>> {
+    let pool = get_db_pool().await?;
+
+    let result: Vec<(i64,)> = sqlx::query_as(
+        r"
+        SELECT n FROM generate_series($1::bigint, $2::bigint) AS n
+        WHERE n NOT IN (SELECT number FROM blockheaders WHERE number BETWEEN $1 AND $2)
+        ORDER BY n
+        ",
+    )
+    .bind(start.value())
+    .bind(end.value())
+    .fetch_all(&*pool)
+    .await
+    .map_err(|e| {
+        BlockchainError::database_query(format!("Failed to find missing blocks in range: {e}"))
+    })?;
+
+    Ok(result
+        .into_iter()
+        .map(|(block_num,)| BlockNumber::from_trusted(block_num))
+        .collect())
+}
+
 /**
  * This finds the null data by querying the blockheaders table.
  * Included fields is based on the reth primitives defined in <https://reth.rs/docs/reth_primitives/struct.Header.html>
