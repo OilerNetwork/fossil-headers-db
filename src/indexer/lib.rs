@@ -4,14 +4,15 @@ use std::{
 };
 
 use crate::{
-    db::DbConnection,
+    db::{find_first_gap, DbConnection},
     errors::{BlockchainError, Result},
     indexer::{
         batch_service::{BatchIndexConfig, BatchIndexer},
         quick_service::{QuickIndexConfig, QuickIndexer},
     },
     repositories::index_metadata::{
-        get_index_metadata, set_initial_indexing_status, IndexMetadataDto,
+        get_index_metadata, set_initial_indexing_status, update_backfilling_block_number_query,
+        IndexMetadataDto,
     },
     router,
     rpc::{EthereumJsonRpcClient, EthereumRpcProvider},
@@ -368,11 +369,37 @@ async fn initialize_index_metadata(
     rpc_client: Arc<EthereumJsonRpcClient>,
     indexing_config: &IndexingConfig,
 ) -> Result<IndexMetadataDto> {
-    if let Some(metadata) = get_index_metadata(db.clone()).await? {
+    let latest_block_number = rpc_client.get_latest_finalized_blocknumber(None).await?;
+
+    // Check if we have existing metadata
+    if let Some(mut metadata) = get_index_metadata(db.clone()).await? {
+        // For existing databases, we need to ensure backfill is properly configured
+        // This handles cases where the database has gaps that need to be filled
+        let needs_backfill_setup = should_setup_backfill_for_existing_db(
+            db.clone(),
+            &metadata,
+            latest_block_number,
+            indexing_config,
+        )
+        .await?;
+
+        if needs_backfill_setup {
+            info!(
+                "[initialize] Existing database detected with potential gaps. Setting up backfill."
+            );
+            setup_backfill_for_existing_database(
+                db.clone(),
+                &mut metadata,
+                latest_block_number,
+                indexing_config,
+            )
+            .await?;
+        }
+
         return Ok(metadata);
     }
 
-    let latest_block_number = rpc_client.get_latest_finalized_blocknumber(None).await?;
+    // For new databases, set up initial metadata
 
     let backfill_from_block = indexing_config.start_block_offset.map_or_else(
         || {
@@ -490,4 +517,129 @@ fn format_error_details(error: &BlockchainError) -> String {
     }
 
     details.join("\n  ")
+}
+
+/// Determines if backfill setup is needed for an existing database
+///
+/// This function performs gap analysis to determine if the existing database
+/// needs backfill configuration to handle missing blocks.
+async fn should_setup_backfill_for_existing_db(
+    _db: Arc<DbConnection>,
+    metadata: &IndexMetadataDto,
+    latest_block_number: BlockNumber,
+    _indexing_config: &IndexingConfig,
+) -> Result<bool> {
+    // If backfilling is already disabled and backfilling_block_number is None or 0,
+    // it might indicate backfill was completed or never set up properly
+    let backfill_block = metadata.backfilling_block_number.unwrap_or(0);
+
+    if !metadata.is_backfilling && backfill_block <= metadata.indexing_starting_block_number {
+        // Check if there are any gaps in a sample range to determine if we need backfill
+        let sample_end = std::cmp::min(
+            latest_block_number.value(),
+            metadata.indexing_starting_block_number + 10000, // Sample first 10k blocks
+        );
+
+        if sample_end > metadata.indexing_starting_block_number {
+            let has_gaps = find_first_gap(
+                BlockNumber::from_trusted(metadata.indexing_starting_block_number),
+                BlockNumber::from_trusted(sample_end),
+            )
+            .await?;
+
+            if has_gaps.is_some() {
+                info!(
+                    "[initialize] Gap detected in sample range {} to {}, full backfill needed",
+                    metadata.indexing_starting_block_number, sample_end
+                );
+                return Ok(true);
+            }
+        }
+    }
+
+    // Also check if the current_latest_block_number is way behind the actual latest
+    // This could indicate the database is significantly out of sync
+    let block_gap = latest_block_number.value() - metadata.current_latest_block_number;
+    if block_gap > 1000 {
+        info!(
+            "[initialize] Database is {} blocks behind current latest, ensuring backfill is active",
+            block_gap
+        );
+        return Ok(true);
+    }
+
+    Ok(false)
+}
+
+/// Sets up backfill configuration for an existing database with gaps
+///
+/// This function configures the metadata to enable proper backfilling of missing blocks
+/// in databases that already exist but have gaps.
+async fn setup_backfill_for_existing_database(
+    db: Arc<DbConnection>,
+    metadata: &mut IndexMetadataDto,
+    latest_block_number: BlockNumber,
+    indexing_config: &IndexingConfig,
+) -> Result<()> {
+    // Calculate appropriate backfill starting point
+    let backfill_from_block = indexing_config.start_block_offset.map_or_else(
+        || {
+            // For existing databases, start from the latest block in the network
+            // and work backwards. This ensures we don't miss recent blocks while
+            // also setting up historical backfill.
+            if latest_block_number.value() > 1000 {
+                latest_block_number - 1000 // Start 1000 blocks back for safety
+            } else {
+                BlockNumber::from_trusted(0)
+            }
+        },
+        |offset| latest_block_number - i64::try_from(offset).unwrap_or(0),
+    );
+
+    // Update the metadata to enable backfilling
+    let mut tx = db.pool.begin().await.map_err(|e| {
+        BlockchainError::database_connection(format!("Failed to begin transaction: {e}"))
+    })?;
+
+    // Set is_backfilling to true to enable the batch indexer
+    sqlx::query("UPDATE index_metadata SET is_backfilling = $1, updated_at = CURRENT_TIMESTAMP")
+        .bind(true)
+        .execute(&mut *tx)
+        .await
+        .map_err(|e| {
+            BlockchainError::database_connection(format!("Failed to enable backfilling: {e}"))
+        })?;
+
+    // Set the backfilling_block_number to start backfill from appropriate point
+    update_backfilling_block_number_query(&mut tx, backfill_from_block.value()).await?;
+
+    // Update current_latest_block_number if needed
+    if latest_block_number.value() > metadata.current_latest_block_number {
+        sqlx::query("UPDATE index_metadata SET current_latest_block_number = $1, updated_at = CURRENT_TIMESTAMP")
+            .bind(latest_block_number.value())
+            .execute(&mut *tx)
+            .await
+            .map_err(|e| {
+                BlockchainError::database_connection(format!("Failed to update latest block: {e}"))
+            })?;
+    }
+
+    tx.commit().await.map_err(|e| {
+        BlockchainError::database_connection(format!("Failed to commit backfill setup: {e}"))
+    })?;
+
+    // Update the metadata struct to reflect changes
+    metadata.is_backfilling = true;
+    metadata.backfilling_block_number = Some(backfill_from_block.value());
+    if latest_block_number.value() > metadata.current_latest_block_number {
+        metadata.current_latest_block_number = latest_block_number.value();
+    }
+
+    info!(
+        "[initialize] Backfill configured: starting from block {}, target: block {}",
+        backfill_from_block.value(),
+        metadata.indexing_starting_block_number
+    );
+
+    Ok(())
 }
