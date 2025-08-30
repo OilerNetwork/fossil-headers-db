@@ -602,8 +602,10 @@ async fn setup_backfill_for_existing_database(
     })?;
 
     // Set is_backfilling to true to enable the batch indexer
-    sqlx::query("UPDATE index_metadata SET is_backfilling = $1, updated_at = CURRENT_TIMESTAMP")
+    // Also ensure indexing_starting_block_number is 0 for full backfill to genesis
+    sqlx::query("UPDATE index_metadata SET is_backfilling = $1, indexing_starting_block_number = $2, updated_at = CURRENT_TIMESTAMP")
         .bind(true)
+        .bind(0i64) // Always backfill to genesis (block 0)
         .execute(&mut *tx)
         .await
         .map_err(|e| {
@@ -630,6 +632,7 @@ async fn setup_backfill_for_existing_database(
 
     // Update the metadata struct to reflect changes
     metadata.is_backfilling = true;
+    metadata.indexing_starting_block_number = 0; // Always backfill to genesis
     metadata.backfilling_block_number = Some(backfill_from_block.value());
     if latest_block_number.value() > metadata.current_latest_block_number {
         metadata.current_latest_block_number = latest_block_number.value();
