@@ -529,6 +529,16 @@ async fn should_setup_backfill_for_existing_db(
     latest_block_number: BlockNumber,
     _indexing_config: &IndexingConfig,
 ) -> Result<bool> {
+    // CRITICAL: If indexing_starting_block_number is not 0, we need full backfill to genesis
+    // This handles databases that were previously configured with a higher starting block
+    if metadata.indexing_starting_block_number != 0 {
+        info!(
+            "[initialize] indexing_starting_block_number is {}, forcing full backfill to genesis",
+            metadata.indexing_starting_block_number
+        );
+        return Ok(true);
+    }
+
     // If backfilling is already disabled and backfilling_block_number is None or 0,
     // it might indicate backfill was completed or never set up properly
     let backfill_block = metadata.backfilling_block_number.unwrap_or(0);
