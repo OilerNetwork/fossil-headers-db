@@ -65,7 +65,9 @@ const MAX_RETRIES: u8 = 5;
 
 #[derive(Serialize, Deserialize, Debug)]
 pub struct RpcResponse<T> {
-    pub result: T,
+    pub result: Option<T>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub error: Option<serde_json::Value>,
 }
 
 #[derive(Serialize, Deserialize, Debug)]
@@ -288,7 +290,7 @@ pub async fn get_latest_finalized_blocknumber(timeout: Option<u64>) -> Result<Bl
 /// let block_data = get_full_block_by_number(block_number, Some(30)).await?;
 ///
 /// println!("Block hash: {}", block_data.hash);
-/// println!("Number of transactions: {}", block_data.transactions.len());
+/// println!("Block number: {}", block_data.number);
 /// println!("Gas used: {}", block_data.gas_used);
 /// # Ok(())
 /// # }
@@ -296,15 +298,15 @@ pub async fn get_latest_finalized_blocknumber(timeout: Option<u64>) -> Result<Bl
 pub async fn get_full_block_by_number(
     number: BlockNumber,
     timeout: Option<u64>,
-) -> Result<BlockHeaderWithFullTransaction> {
+) -> Result<BlockHeaderWithEmptyTransaction> {
     let params = RpcRequest {
         jsonrpc: "2.0",
         id: "0".to_string(),
         method: "eth_getBlockByNumber",
-        params: (format!("0x{:x}", number.value()), true),
+        params: (format!("0x{:x}", number.value()), false), // NEVER request transactions
     };
 
-    make_retrying_rpc_call::<_, BlockHeaderWithFullTransaction>(
+    make_retrying_rpc_call::<_, BlockHeaderWithEmptyTransaction>(
         &params,
         timeout,
         MAX_RETRIES.into(),
@@ -317,7 +319,7 @@ pub async fn get_full_block_by_number(
 pub async fn batch_get_full_block_by_number(
     numbers: Vec<BlockNumber>,
     timeout: Option<u64>,
-) -> Result<Vec<BlockHeaderWithFullTransaction>> {
+) -> Result<Vec<BlockHeaderWithEmptyTransaction>> {
     let mut params = Vec::new();
     for number in numbers {
         let num_str = number.value().to_string();
@@ -325,10 +327,10 @@ pub async fn batch_get_full_block_by_number(
             jsonrpc: "2.0",
             id: num_str,
             method: "eth_getBlockByNumber",
-            params: (format!("0x{:x}", number.value()), true),
+            params: (format!("0x{:x}", number.value()), false), // NEVER request transactions
         });
     }
-    make_rpc_call::<_, Vec<BlockHeaderWithFullTransaction>>(&params, timeout).await
+    make_rpc_call::<_, Vec<BlockHeaderWithEmptyTransaction>>(&params, timeout).await
 }
 
 fn get_connection_string() -> Result<&'static str> {
@@ -379,15 +381,33 @@ async fn parse_rpc_response<R: for<'de> Deserialize<'de>>(
         e
     })?;
 
-    serde_json::from_str::<RpcResponse<R>>(&text)
-        .map(|parsed| parsed.result)
-        .map_err(|e| {
-            error!(
-                "Deserialization error: {:?}\nResponse snippet: {:?}",
-                e, text
-            );
-            e.into()
-        })
+    let parsed = serde_json::from_str::<RpcResponse<R>>(&text).map_err(|e| {
+        error!(
+            "Deserialization error: {:?}\nResponse snippet: {:?}",
+            e, text
+        );
+        BlockchainError::rpc_connection(format!("Failed to parse RPC response: {e}"))
+    })?;
+
+    match parsed.result {
+        Some(result) => Ok(result),
+        None => {
+            parsed.error.map_or_else(
+                || {
+                    error!("FATAL: RPC returned null result - block does not exist! Application must stop to prevent data gaps.");
+                    Err(BlockchainError::rpc_connection(
+                        "FATAL: Block not found (null result) - stopping to prevent gaps".to_string(),
+                    ))
+                },
+                |error| {
+                    error!("FATAL: RPC error response: {:?}", error);
+                    Err(BlockchainError::rpc_connection(format!(
+                        "FATAL RPC error: {error}"
+                    )))
+                }
+            )?
+        }
+    }
 }
 
 async fn make_rpc_call<T: Serialize + Sync, R: for<'de> Deserialize<'de>>(
@@ -409,6 +429,16 @@ async fn make_retrying_rpc_call<T: Serialize + Sync, R: for<'de> Deserialize<'de
         match make_rpc_call(params, timeout).await {
             Ok(result) => return Ok(result),
             Err(e) => {
+                // Check if this is a FATAL error (null block) - don't retry these!
+                let error_msg = format!("{e:?}");
+                if error_msg.contains("FATAL") || error_msg.contains("null result") {
+                    error!(
+                        "FATAL ERROR - stopping immediately to prevent data gaps: {:?}",
+                        e
+                    );
+                    return Err(e);
+                }
+
                 attempts += 1;
                 if attempts > max_retries {
                     warn!("Operation failed with error: {:?}. Max retries reached", e);
@@ -565,15 +595,34 @@ impl EthereumJsonRpcClient {
             e
         })?;
 
-        serde_json::from_str::<RpcResponse<R>>(&text)
-            .map(|parsed| parsed.result)
-            .map_err(|e| {
-                error!(
-                    "Deserialization error: {:?}\nResponse snippet: {:?}",
-                    e, text
-                );
-                e.into()
-            })
+        let parsed = serde_json::from_str::<RpcResponse<R>>(&text).map_err(|e| {
+            error!(
+                "Deserialization error: {:?}\nResponse snippet: {:?}",
+                e, text
+            );
+            BlockchainError::rpc_connection(format!("Failed to parse RPC response: {e}"))
+        })?;
+
+        match parsed.result {
+            Some(result) => Ok(result),
+            None => {
+                parsed.error.map_or_else(
+                    || {
+                        error!("FATAL: RPC returned null result - block does not exist! Application must stop to prevent data gaps.");
+                        Err(BlockchainError::rpc_connection(
+                            "FATAL: Block not found (null result) - stopping to prevent gaps"
+                                .to_string(),
+                        ))
+                    },
+                    |error| {
+                        error!("FATAL: RPC error response: {:?}", error);
+                        Err(BlockchainError::rpc_connection(format!(
+                            "FATAL RPC error: {error}"
+                        )))
+                    }
+                )?
+            }
+        }
     }
 
     async fn make_rpc_call<T: Serialize + Send + Sync, R: for<'de> Deserialize<'de> + Send>(
@@ -598,6 +647,16 @@ impl EthereumJsonRpcClient {
             match self.make_rpc_call(params.clone(), timeout).await {
                 Ok(result) => return Ok(result),
                 Err(e) => {
+                    // Check if this is a FATAL error (null block) - don't retry these!
+                    let error_msg = format!("{e:?}");
+                    if error_msg.contains("FATAL") || error_msg.contains("null result") {
+                        error!(
+                            "FATAL ERROR - stopping immediately to prevent data gaps: {:?}",
+                            e
+                        );
+                        return Err(e);
+                    }
+
                     attempts += 1;
                     if attempts > self.max_retries {
                         warn!("Operation failed with error: {:?}. Max retries reached", e);
@@ -638,14 +697,14 @@ impl EthereumRpcProvider for EthereumJsonRpcClient {
     async fn get_full_block_by_number(
         &self,
         number: BlockNumber,
-        include_tx: bool,
+        _include_tx: bool,
         timeout: Option<u64>,
     ) -> Result<BlockHeader> {
         let params = RpcRequest {
             jsonrpc: "2.0",
             id: "0".to_string(),
             method: "eth_getBlockByNumber",
-            params: (format!("0x{:x}", number.value()), include_tx),
+            params: (format!("0x{:x}", number.value()), false), // ALWAYS false - never request transactions
         };
 
         self.make_retrying_rpc_call::<_, BlockHeader>(&params, timeout)
@@ -691,7 +750,9 @@ mod integration_tests {
         let block_21598014_response =
             serde_json::from_str::<RpcResponse<BlockHeader>>(&block_21598014_string).unwrap();
 
-        block_21598014_response.result
+        block_21598014_response
+            .result
+            .expect("Test fixture should have valid block")
     }
 
     // Helper function to start a TCP server that returns predefined JSON-RPC responses
@@ -906,41 +967,41 @@ mod integration_tests {
 
     #[tokio::test]
     #[serial]
-    async fn test_get_full_block_by_number_should_retry_when_failed() {
+    async fn test_get_full_block_by_number_should_fail_on_null_response() {
         let rpc_response = get_fixtures_for_tests().await;
         start_mock_rpc_server(
             "127.0.0.1:8092".to_owned(),
-            vec![None, Some(rpc_response.clone())], // introduce an empty response to induce failure
+            vec![None, Some(rpc_response.clone())], // null response should cause FATAL error
         );
 
         let client = EthereumJsonRpcClient::new("http://127.0.0.1:8092".to_owned(), 2);
         let block =
             client.get_full_block_by_number(BlockNumber::from_trusted(21_598_014), false, None);
 
-        let block = block.await.unwrap();
-        assert_eq!(block.hash, rpc_response.hash);
-        assert_eq!(block.number, rpc_response.number);
+        // Should fail with FATAL error on null response - no retries allowed
+        let result = block.await;
+        assert!(result.is_err());
+        let error_msg = format!("{:?}", result.unwrap_err());
+        assert!(error_msg.contains("FATAL") && error_msg.contains("null result"));
     }
 
     #[tokio::test]
     #[serial]
-    async fn test_get_latest_finalized_blocknumber_should_retry_when_failed() {
+    async fn test_get_latest_finalized_blocknumber_should_fail_on_null_response() {
         let rpc_response = get_fixtures_for_tests().await;
         start_mock_rpc_server(
             "127.0.0.1:8093".to_owned(),
-            vec![None, Some(rpc_response.clone())], // introduce an empty response to induce failure
+            vec![None, Some(rpc_response.clone())], // null response should cause FATAL error
         );
 
         let client = EthereumJsonRpcClient::new("http://127.0.0.1:8093".to_owned(), 2);
         let block_number = client.get_latest_finalized_blocknumber(None);
 
-        let block_number = block_number.await.unwrap();
-        assert_eq!(
-            block_number,
-            BlockNumber::from_trusted(
-                i64::from_str_radix(rpc_response.number.strip_prefix("0x").unwrap(), 16).unwrap()
-            )
-        );
+        // Should fail with FATAL error on null response - no retries allowed
+        let result = block_number.await;
+        assert!(result.is_err());
+        let error_msg = format!("{:?}", result.unwrap_err());
+        assert!(error_msg.contains("FATAL") && error_msg.contains("null result"));
     }
 
     #[tokio::test]
@@ -972,7 +1033,7 @@ mod integration_tests {
 
     #[tokio::test]
     #[serial]
-    async fn test_get_full_block_by_number_with_tx() {
+    async fn test_get_full_block_by_number_ignores_tx_request() {
         let rpc_response = get_fixtures_for_tests().await;
         start_mock_rpc_server(
             "127.0.0.1:8095".to_owned(),
@@ -980,28 +1041,20 @@ mod integration_tests {
         );
 
         let client = EthereumJsonRpcClient::new("http://127.0.0.1:8095".to_owned(), 1);
+        // Even when requesting transactions (true), should only get headers
         let block =
             client.get_full_block_by_number(BlockNumber::from_trusted(21_598_014), true, None);
 
         let block = block.await.unwrap();
         assert_eq!(block.hash, rpc_response.hash);
         assert_eq!(block.number, rpc_response.number);
-        for (idx, block_tx) in block.transactions.iter().enumerate() {
-            if let BlockTransaction::Full(tx) = block_tx {
-                let fixture_tx: Transaction = rpc_response.clone().transactions[idx]
-                    .clone()
-                    .try_into()
-                    .unwrap();
 
-                assert_eq!(tx.hash, fixture_tx.hash);
-                assert_eq!(tx.block_number, fixture_tx.block_number);
-                assert_eq!(tx.from, fixture_tx.from);
-                assert_eq!(tx.to, fixture_tx.to);
-                assert_eq!(tx.transaction_index, fixture_tx.transaction_index);
-                assert_eq!(tx.value, fixture_tx.value);
-            } else {
-                panic!("returned tx are hashed.")
+        // Verify that transaction requests are ignored - should only get hashed transactions (headers-only mode)
+        for block_tx in &block.transactions {
+            if let BlockTransaction::Full(_tx) = block_tx {
+                panic!("Should not return full transactions - headers-only mode enforced");
             }
+            // Should only have hashed transactions in headers-only mode
         }
     }
 

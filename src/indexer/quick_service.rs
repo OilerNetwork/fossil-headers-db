@@ -416,7 +416,6 @@ where
     ) -> Vec<task::JoinHandle<Result<crate::rpc::BlockHeader, crate::errors::BlockchainError>>>
     {
         let timeout = self.config.rpc_timeout;
-        let should_index_txs = self.config.should_index_txs;
 
         block_range
             .iter()
@@ -426,7 +425,7 @@ where
                     provider
                         .get_full_block_by_number(
                             BlockNumber::from_trusted(block_number),
-                            should_index_txs,
+                            false, // NEVER request transactions - headers only
                             Some(timeout.into()),
                         )
                         .await
@@ -667,7 +666,7 @@ mod tests {
             .unwrap();
 
             let block = serde_json::from_str::<RpcResponse<BlockHeader>>(&json_string).unwrap();
-            block_fixtures.push(block.result);
+            block_fixtures.push(block.result.expect("Test fixture should have valid block"));
         }
 
         block_fixtures

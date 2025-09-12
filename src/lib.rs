@@ -143,7 +143,7 @@ pub mod blockchain {
     //! This module provides a simplified interface to Ethereum RPC operations,
     //! abstracting the underlying RPC client complexity.
 
-    pub use crate::rpc::{BlockHeader, BlockHeaderWithFullTransaction, EthereumRpcProvider};
+    pub use crate::rpc::{BlockHeader, BlockHeaderWithEmptyTransaction, EthereumRpcProvider};
 }
 
 pub mod health {

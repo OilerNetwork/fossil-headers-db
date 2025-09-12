@@ -461,8 +461,12 @@ mod tests {
             serde_json::from_str::<RpcResponse<BlockHeader>>(&block_21598015).unwrap();
 
         vec![
-            block_21598014_response.result,
-            block_21598015_response.result,
+            block_21598014_response
+                .result
+                .expect("Test fixture should have valid block"),
+            block_21598015_response
+                .result
+                .expect("Test fixture should have valid block"),
         ]
     }
 

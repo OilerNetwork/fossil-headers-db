@@ -44,6 +44,8 @@ coverage: ## Generate test coverage report
 # Development Environment
 dev-up: ## Start local development environment
 	@echo "Starting local development environment..."
+	@echo "Creating network if it doesn't exist..."
+	@docker network create fossil-network 2>/dev/null || true
 	docker compose -f docker/docker-compose.local.yml up -d
 	@echo "Database available at localhost:5432"
 	@echo "Waiting for database to be ready..."

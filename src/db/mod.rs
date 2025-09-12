@@ -61,14 +61,12 @@
 //! ```
 
 use crate::errors::{BlockchainError, Result};
-use crate::rpc::BlockHeaderWithFullTransaction;
+use crate::rpc::BlockHeaderWithEmptyTransaction;
 use crate::types::BlockNumber;
 use crate::utils::convert_hex_string_to_i64;
 use futures::FutureExt;
 use sqlx::postgres::PgConnectOptions;
-use sqlx::query_builder::Separated;
 use sqlx::ConnectOptions;
-use sqlx::QueryBuilder;
 use sqlx::{postgres::PgPoolOptions, Pool, Postgres};
 use std::sync::Arc;
 use std::time::Duration;
@@ -482,7 +480,7 @@ pub async fn find_null_data(start: BlockNumber, end: BlockNumber) -> Result<Vec<
 
 async fn insert_block_header(
     tx: &mut sqlx::Transaction<'_, sqlx::Postgres>,
-    block_header: &BlockHeaderWithFullTransaction,
+    block_header: &BlockHeaderWithEmptyTransaction,
 ) -> Result<bool> {
     let result = sqlx::query(
         r"
@@ -562,70 +560,16 @@ async fn insert_block_header(
     Ok(true)
 }
 
-async fn insert_transactions(
-    tx: &mut sqlx::Transaction<'_, sqlx::Postgres>,
-    block_header: &BlockHeaderWithFullTransaction,
-) -> Result<()> {
-    if block_header.transactions.is_empty() {
-        return Ok(());
-    }
-
-    let processed_transactions: Result<Vec<_>> = block_header
-        .transactions
-        .iter()
-        .map(|tx| {
-            let tx_block_number = convert_hex_string_to_i64(&tx.block_number)
-                .map_err(|_| BlockchainError::invalid_hex(&tx.block_number))?;
-            let tx_index = convert_hex_string_to_i64(&tx.transaction_index)
-                .map_err(|_| BlockchainError::invalid_hex(&tx.transaction_index))?;
-
-            Ok((tx, tx_block_number, tx_index))
-        })
-        .collect();
-
-    let processed_transactions = processed_transactions?;
-
-    let mut query_builder: QueryBuilder<Postgres> = QueryBuilder::new(
-        "INSERT INTO transactions (
-            block_number, transaction_hash, transaction_index,
-            from_addr, to_addr, value, gas_price,
-            max_priority_fee_per_gas, max_fee_per_gas, gas, chain_id
-        ) ",
-    );
-
-    query_builder.push_values(
-        processed_transactions.iter(),
-        |mut b: Separated<'_, '_, Postgres, &'static str>, (tx_data, tx_block_number, tx_index)| {
-            b.push_bind(*tx_block_number)
-                .push_bind(&tx_data.hash)
-                .push_bind(*tx_index)
-                .push_bind(&tx_data.from)
-                .push_bind(&tx_data.to)
-                .push_bind(&tx_data.value)
-                .push_bind(tx_data.gas_price.as_deref().unwrap_or("0"))
-                .push_bind(tx_data.max_priority_fee_per_gas.as_deref().unwrap_or("0"))
-                .push_bind(tx_data.max_fee_per_gas.as_deref().unwrap_or("0"))
-                .push_bind(&tx_data.gas)
-                .push_bind(&tx_data.chain_id);
-        },
-    );
-
-    query_builder.push(" ON CONFLICT (transaction_hash) DO NOTHING");
-
-    let query = query_builder.build();
-    let result = query.execute(&mut **tx).await.map_err(|e| {
-        BlockchainError::database_query(format!("Failed to insert transactions: {e}"))
-    })?;
-
-    info!(
-        "Inserted {} transactions for block {}",
-        result.rows_affected(),
-        block_header.number
-    );
-    Ok(())
+#[allow(clippy::missing_const_for_fn)]
+fn insert_transactions(
+    _tx: &mut sqlx::Transaction<'_, sqlx::Postgres>,
+    _block_header: &BlockHeaderWithEmptyTransaction,
+) {
+    // Since we're using BlockHeaderWithEmptyTransaction, there are no transactions to process
+    // This function is a no-op for headers-only mode
 }
 
-pub async fn write_blockheader(block_header: BlockHeaderWithFullTransaction) -> Result<()> {
+pub async fn write_blockheader(block_header: BlockHeaderWithEmptyTransaction) -> Result<()> {
     let pool = get_db_pool().await?;
     let mut tx = pool.begin().await?;
 
@@ -634,7 +578,7 @@ pub async fn write_blockheader(block_header: BlockHeaderWithFullTransaction) -> 
         return Ok(());
     }
 
-    insert_transactions(&mut tx, &block_header).await?;
+    insert_transactions(&mut tx, &block_header);
 
     tx.commit().await.map_err(|e| {
         BlockchainError::database_transaction(format!("Failed to commit transaction: {e}"))

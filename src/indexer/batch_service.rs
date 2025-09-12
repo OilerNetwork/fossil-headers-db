@@ -548,7 +548,6 @@ where
         semaphore: &Arc<Semaphore>,
     ) -> Vec<task::JoinHandle<Result<crate::rpc::BlockHeader, eyre::Report>>> {
         let timeout = self.config.rpc_timeout;
-        let should_index_txs = self.config.should_index_txs;
         let task_timeout = self.config.task_timeout;
 
         block_numbers
@@ -568,7 +567,7 @@ where
                         Duration::from_secs(task_timeout.into()),
                         provider.get_full_block_by_number(
                             block_number,
-                            should_index_txs,
+                            false, // NEVER request transactions - headers only
                             Some(timeout.into()),
                         ),
                     )
@@ -721,7 +720,7 @@ mod tests {
             .unwrap();
 
             let block = serde_json::from_str::<RpcResponse<BlockHeader>>(&json_string).unwrap();
-            block_fixtures.push(block.result);
+            block_fixtures.push(block.result.expect("Test fixture should have valid block"));
         }
 
         block_fixtures
