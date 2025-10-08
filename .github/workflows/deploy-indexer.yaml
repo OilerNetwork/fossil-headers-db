@@ -1,8 +1,11 @@
-name: Docker Build, Push and Deploy Pitchlake UI
+name: Docker Build, Push and Deploy fossil indexer
 on:
   push:
     branches:
       - main
+  workflow_call:
+  # Allow manual trigger for testing
+  workflow_dispatch:
 
 env:
   AWS_REGION: us-east-1
