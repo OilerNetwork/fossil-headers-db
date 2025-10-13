@@ -97,31 +97,71 @@ async fn fill_missing_blocks_in_range(
     search_end: BlockNumber,
     should_terminate: &AtomicBool,
 ) -> Result<()> {
+    let semaphore = Arc::new(Semaphore::new(MAX_CONCURRENT_TASKS));
     let mut range_end_pointer: BlockNumber;
-    for _ in 0..MAX_RETRIES {
-        while !should_terminate.load(Ordering::Relaxed) && range_start_pointer <= search_end {
-            range_end_pointer = BlockNumber::from_trusted(
-                search_end
-                    .value()
-                    .min(range_start_pointer.value() + 100_000 - 1),
+
+    while !should_terminate.load(Ordering::Relaxed) && range_start_pointer <= search_end {
+        range_end_pointer = BlockNumber::from_trusted(
+            search_end
+                .value()
+                .min(range_start_pointer.value() + 100_000 - 1),
+        );
+
+        // Find all gaps in the current range
+        let mut missing_blocks = Vec::new();
+        let mut current_start = range_start_pointer;
+
+        while current_start <= range_end_pointer {
+            if let Some(block_number) = db::find_first_gap(current_start, range_end_pointer).await? {
+                missing_blocks.push(block_number);
+                current_start = BlockNumber::from_trusted(block_number.value() + 1);
+
+                // Limit batch size to avoid memory issues
+                if missing_blocks.len() >= 100 {
+                    break;
+                }
+            } else {
+                break;
+            }
+        }
+
+        if missing_blocks.is_empty() {
+            info!(
+                "[fill_gaps] No missing values found from {} to {}",
+                range_start_pointer, range_end_pointer
             );
-            // Find gaps in block number
-            if let Some(block_number) =
-                db::find_first_gap(range_start_pointer, range_end_pointer).await?
-            {
-                info!(
-                    "[fill_gaps] Found missing block number: {}",
-                    block_number.value()
+            range_start_pointer = BlockNumber::from_trusted(range_end_pointer.value() + 1);
+        } else {
+            info!(
+                "[fill_gaps] Found {} missing blocks in range {} to {}",
+                missing_blocks.len(),
+                range_start_pointer,
+                range_end_pointer
+            );
+
+            // Process missing blocks concurrently
+            let (successful_count, failed_blocks) =
+                process_missing_blocks_batch(&missing_blocks, &semaphore).await?;
+
+            if !failed_blocks.is_empty() {
+                error!(
+                    "[fill_gaps] Failed to process {} blocks: {:?}",
+                    failed_blocks.len(),
+                    failed_blocks
                 );
-                if process_missing_block(block_number, &mut range_start_pointer).await? {
-                    range_start_pointer = BlockNumber::from_trusted(block_number.value() + 1);
+                // On failure, move past the failed blocks to avoid infinite loop
+                if let Some(last_block) = missing_blocks.last() {
+                    range_start_pointer = BlockNumber::from_trusted(last_block.value() + 1);
                 }
             } else {
                 info!(
-                    "[fill_gaps] No missing values found from {} to {}",
-                    range_start_pointer, range_end_pointer
+                    "[fill_gaps] Successfully processed {} missing blocks",
+                    successful_count
                 );
-                range_start_pointer = BlockNumber::from_trusted(range_end_pointer.value() + 1);
+                // Move to the next potential gap
+                if let Some(last_block) = missing_blocks.last() {
+                    range_start_pointer = BlockNumber::from_trusted(last_block.value() + 1);
+                }
             }
         }
     }
@@ -134,31 +174,102 @@ async fn fill_null_rows(
     should_terminate: &AtomicBool,
 ) -> Result<()> {
     let mut range_start_pointer: BlockNumber = search_start;
+    let semaphore = Arc::new(Semaphore::new(MAX_CONCURRENT_TASKS));
 
     while !should_terminate.load(Ordering::Relaxed) && range_start_pointer <= search_end {
         let range_end_pointer = calculate_range_end(search_end, range_start_pointer);
 
         let null_data_vec = db::find_null_data(range_start_pointer, range_end_pointer).await?;
 
-        range_start_pointer = process_null_blocks(null_data_vec, range_start_pointer).await?;
+        if null_data_vec.is_empty() {
+            range_start_pointer = BlockNumber::from_trusted(range_end_pointer.value() + 1);
+        } else {
+            info!(
+                "[fill_gaps] Found {} blocks with null data in range {} to {}",
+                null_data_vec.len(),
+                range_start_pointer,
+                range_end_pointer
+            );
+
+            let (successful_count, failed_blocks) =
+                process_null_blocks_batch(&null_data_vec, &semaphore).await?;
+
+            if !failed_blocks.is_empty() {
+                error!(
+                    "[fill_gaps] Failed to process {} null blocks: {:?}",
+                    failed_blocks.len(),
+                    failed_blocks
+                );
+            } else {
+                info!(
+                    "[fill_gaps] Successfully processed {} null blocks",
+                    successful_count
+                );
+            }
+
+            // Move past the processed range
+            if let Some(last_block) = null_data_vec.last() {
+                range_start_pointer = *last_block + 1;
+            } else {
+                range_start_pointer = BlockNumber::from_trusted(range_end_pointer.value() + 1);
+            }
+        }
     }
     Ok(())
 }
 
-async fn process_null_blocks(
-    null_data_vec: Vec<BlockNumber>,
-    mut range_start_pointer: BlockNumber,
-) -> Result<BlockNumber> {
-    for null_data_block_number in null_data_vec {
-        info!(
-            "[fill_gaps] Found null values for block number: {}",
-            null_data_block_number
-        );
+async fn process_null_blocks_batch(
+    null_blocks: &[BlockNumber],
+    semaphore: &Arc<Semaphore>,
+) -> Result<(usize, Vec<BlockNumber>)> {
+    let tasks: Vec<_> = null_blocks
+        .iter()
+        .map(|&block_number| {
+            let permit = semaphore.clone();
+            task::spawn(async move {
+                let _permit = permit
+                    .acquire()
+                    .await
+                    .map_err(|_| BlockchainError::internal("Semaphore closed".to_string()))?;
 
-        retry_block_retrieval(null_data_block_number).await?;
-        range_start_pointer = null_data_block_number + 1;
+                tokio::time::timeout(
+                    Duration::from_secs(TASK_TIMEOUT),
+                    retry_block_retrieval(block_number),
+                )
+                .await
+                .map_err(|_| {
+                    BlockchainError::internal(format!(
+                        "Task timeout processing null block {}",
+                        block_number.value()
+                    ))
+                })?
+            })
+        })
+        .collect();
+
+    let all_res = join_all(tasks).await;
+
+    let mut failed_blocks = Vec::new();
+    let mut successful_count = 0;
+
+    for (idx, join_res) in all_res.iter().enumerate() {
+        let block_num = null_blocks[idx];
+        match join_res {
+            Ok(Ok(())) => {
+                successful_count += 1;
+            }
+            Ok(Err(e)) => {
+                warn!("[fill_gaps] Null block {} failed with error: {}", block_num, e);
+                failed_blocks.push(block_num);
+            }
+            Err(e) => {
+                warn!("[fill_gaps] Task for null block {} panicked: {}", block_num, e);
+                failed_blocks.push(block_num);
+            }
+        }
     }
-    Ok(range_start_pointer)
+
+    Ok((successful_count, failed_blocks))
 }
 
 async fn retry_block_retrieval(block_number: BlockNumber) -> Result<()> {
@@ -210,21 +321,72 @@ async fn apply_exponential_backoff(attempt: u64) {
     tokio::time::sleep(Duration::from_secs(backoff)).await;
 }
 
-async fn process_missing_block(
-    block_number: BlockNumber,
-    range_start_pointer: &mut BlockNumber,
-) -> Result<bool> {
-    let mut last_error = None;
+async fn process_missing_blocks_batch(
+    missing_blocks: &[BlockNumber],
+    semaphore: &Arc<Semaphore>,
+) -> Result<(usize, Vec<BlockNumber>)> {
+    let tasks: Vec<_> = missing_blocks
+        .iter()
+        .map(|&block_number| {
+            let permit = semaphore.clone();
+            task::spawn(async move {
+                let _permit = permit
+                    .acquire()
+                    .await
+                    .map_err(|_| BlockchainError::internal("Semaphore closed".to_string()))?;
+
+                tokio::time::timeout(
+                    Duration::from_secs(TASK_TIMEOUT),
+                    process_single_missing_block(block_number),
+                )
+                .await
+                .map_err(|_| {
+                    BlockchainError::internal(format!(
+                        "Task timeout processing block {}",
+                        block_number.value()
+                    ))
+                })?
+            })
+        })
+        .collect();
+
+    let all_res = join_all(tasks).await;
+
+    let mut failed_blocks = Vec::new();
+    let mut successful_count = 0;
+
+    for (idx, join_res) in all_res.iter().enumerate() {
+        let block_num = missing_blocks[idx];
+        match join_res {
+            Ok(Ok(())) => {
+                successful_count += 1;
+            }
+            Ok(Err(e)) => {
+                warn!("[fill_gaps] Block {} failed with error: {}", block_num, e);
+                failed_blocks.push(block_num);
+            }
+            Err(e) => {
+                warn!("[fill_gaps] Task for block {} panicked: {}", block_num, e);
+                failed_blocks.push(block_num);
+            }
+        }
+    }
+
+    Ok((successful_count, failed_blocks))
+}
+
+async fn process_single_missing_block(block_number: BlockNumber) -> Result<()> {
     for i in 0..MAX_RETRIES {
         match rpc::get_full_block_by_number(block_number, Some(TIMEOUT)).await {
             Ok(block) => {
                 db::write_blockheader(block).await?;
-                *range_start_pointer = BlockNumber::from_trusted(block_number.value() + 1);
-                info!(
-                    "[fill_gaps] Successfully wrote block {} after {i} retries",
-                    block_number.value()
-                );
-                return Ok(true);
+                if i > 0 {
+                    info!(
+                        "[fill_gaps] Successfully wrote block {} after {i} retries",
+                        block_number.value()
+                    );
+                }
+                return Ok(());
             }
             Err(e) => {
                 warn!(
@@ -233,28 +395,23 @@ async fn process_missing_block(
                     i + 1,
                     MAX_RETRIES
                 );
-                last_error = Some(e);
+
+                if i == MAX_RETRIES - 1 {
+                    return Err(BlockchainError::block_not_found(format!(
+                        "Failed to retrieve block {} after {MAX_RETRIES} attempts",
+                        block_number.value()
+                    )));
+                }
             }
         }
         let backoff: u64 = (i + 1).pow(2) * 5;
         tokio::time::sleep(Duration::from_secs(backoff)).await;
     }
 
-    // All retries failed - return the error instead of silently continuing
-    last_error.map_or_else(
-        || {
-            Err(BlockchainError::block_not_found(format!(
-                "Failed to retrieve block {} after {MAX_RETRIES} attempts (no error captured)",
-                block_number.value()
-            )))
-        },
-        |_e| {
-            Err(BlockchainError::block_not_found(format!(
-                "Failed to retrieve block {} after {MAX_RETRIES} attempts",
-                block_number.value()
-            )))
-        },
-    )
+    Err(BlockchainError::block_not_found(format!(
+        "Failed to retrieve block {} after {MAX_RETRIES} attempts",
+        block_number.value()
+    )))
 }
 
 async fn get_range_end(end: Option<BlockNumber>) -> Result<BlockNumber> {
